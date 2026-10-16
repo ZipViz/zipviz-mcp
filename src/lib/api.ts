@@ -1,3 +1,5 @@
+import { readJsonBounded } from "./bounded-json.js";
+
 const BASE_URL = "https://api.zipviz.ai";
 
 // Every request through this client is bounded.
@@ -31,9 +33,9 @@ export async function zipvizFetch<T>(
     // it can carry internal detail, and (for a compromised/misbehaving upstream)
     // attacker-influenced content. Consume the body so the socket can be reused,
     // then discard it.
-    await res.text().catch(() => "");
+    await res.body?.cancel().catch(() => {});
     throw new Error(`ZipViz API error: ${res.status} ${res.statusText}`.trim());
   }
 
-  return res.json() as Promise<T>;
+  return (await readJsonBounded(res)) as T;
 }

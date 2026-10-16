@@ -1,5 +1,6 @@
 import { createPublicKey, verify, type KeyObject } from "node:crypto";
 import { isValidVizDomain } from "../lib/viz-domain.js";
+import { readJsonBounded } from "../lib/bounded-json.js";
 import {
   ConversationWireError,
   encodeConversationWire,
@@ -298,7 +299,7 @@ export class RegistryPubkeyCache {
         );
       }
       try {
-        body = await Promise.race([res.json(), aborted]);
+        body = await Promise.race([readJsonBounded(res), aborted]);
       } catch (err) {
         if (err instanceof EnvelopeVerifyError) throw err;
         // Malformed body on a 200 is an availability problem (proxy
