@@ -130,13 +130,11 @@ export function behaviourUnavailableLevel(
 export type BehaviourClaim = {
   /** True only when the registry says the agent has earned it. Never inferred. */
   blue_tick: boolean;
-  /** Ladder rung, closed: the measured stages plus `unseen`. */
+  // The next four are fields returned by the public /v1/blue-tick reputation
+  // object; see the API docs.
   calibration_stage: CalibrationStage | null;
-  /** Composite behavioural entropy for the most recent scored session. */
   entropy_score: number | null;
-  /** Deviation from the expected baseline, in standard deviations. */
   z_score: number | null;
-  /** Whether the latest session read as anomalous for this agent. */
   drift_detected: boolean | null;
   /**
    * A plain-language line the agent can repeat to its human verbatim. The
@@ -281,12 +279,8 @@ async function fetchBehaviour(
   // THE PRODUCER EMITS TWO SHAPES AND ONLY TWO. Validate against both in full,
   // rather than picking fields out of whatever arrives.
   //
-  // An earlier cut accepted any reputation object carrying "at least one usable
-  // field", on the theory that a stage without scores was a legitimate early
-  // ladder rung. It is not: the registry copies all four measurement fields
-  // verbatim, so a body missing three of them is one the service would never
-  // send — and it minted an earned tick, with the missing companions silently
-  // nulled.
+  // A body missing any of the four reputation fields is one the registry never
+  // sends, so it is refused rather than filled in.
   //
   // Shape one, unmeasured: `blue_tick: null` beside `reputation: null`. That is
   // a real answer about the agent, so it is neither cached nor audited.
@@ -300,9 +294,8 @@ async function fetchBehaviour(
   }
 
   // Shape two: a boolean tick bound to a reputation the producer can emit.
-  // Extra keys are stripped by the projector; unknown stages, mixed
-  // unseen/measured fields, a tick on an unseen record, and a tick while
-  // drifting fail closed. Anything we cannot project is `malformed`.
+  // Extra keys are stripped by the projector. Anything the projector or the
+  // tick check refuses is `malformed`.
   if (typeof data.blue_tick !== "boolean") {
     return { kind: "unavailable", reason: "malformed" };
   }
