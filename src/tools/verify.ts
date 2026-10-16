@@ -1,5 +1,12 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  MAX_DOMAIN_CHARS,
+  MAX_SIGNATURE_CHARS,
+  MAX_TIMESTAMP_CHARS,
+  MESSAGE_TOO_LARGE,
+  fitsMessageBudget,
+} from "../lib/input-limits.js";
 import { validateRemoteFailure, validateRemoteSuccess } from "../lib/verify-contract.js";
 import type { ProducerReputation } from "../lib/producer-reputation.js";
 import { isValidVizDomain, sameVizIdentity } from "../lib/viz-domain.js";
@@ -128,14 +135,20 @@ export function registerVerify(server: McpServer) {
       inputSchema: {
         domain: z
           .string()
+          .max(MAX_DOMAIN_CHARS)
           .refine(isValidVizDomain, "Must be a valid lowercase .viz domain")
           .describe("The domain of the agent that signed the message"),
-        message: z.string().describe("The original message content"),
+        message: z
+          .string()
+          .refine(fitsMessageBudget, MESSAGE_TOO_LARGE)
+          .describe("The original message content"),
         timestamp: z
           .string()
+          .max(MAX_TIMESTAMP_CHARS)
           .describe("ISO 8601 timestamp of when the message was signed"),
         signature: z
           .string()
+          .max(MAX_SIGNATURE_CHARS)
           .describe("The Ed25519 signature to verify (base64)"),
       },
     },

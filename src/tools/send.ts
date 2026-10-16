@@ -10,6 +10,7 @@ import { attestReply, type ReplyAttestation, VERIFY_TIMEOUT_MS } from "../lib/re
 import { wrapUntrusted } from "../lib/untrusted.js";
 import { boundModelText } from "../lib/model-text.js";
 import { localV2ReceiptVerifyFn } from "../core/receipts.js";
+import { MAX_DOMAIN_CHARS, MESSAGE_TOO_LARGE, fitsMessageBudget } from "../lib/input-limits.js";
 
 // Cap the recipient's response we read, parse, and surface. A hostile or
 // broken recipient must not be able to flood the caller's context (or our
@@ -65,10 +66,15 @@ export function registerSend(server: McpServer) {
       inputSchema: {
         domain: z
           .string()
+          .max(MAX_DOMAIN_CHARS)
           .describe("The agent domain to message, e.g. ticki.adkgo.viz"),
-        message: z.string().describe("The message to send to the agent"),
+        message: z
+          .string()
+          .refine(fitsMessageBudget, MESSAGE_TOO_LARGE)
+          .describe("The message to send to the agent"),
         as: z
           .string()
+          .max(MAX_DOMAIN_CHARS)
           .describe(
             "REQUIRED. The .viz domain to send AS, e.g. stuart-clau.smc.viz. " +
               "The message is signed locally with that identity's Ed25519 key and " +

@@ -5,6 +5,7 @@ import { zipvizFetch } from "../lib/api.js";
 import type { AgentCard } from "../lib/types.js";
 import { cardName, cardTokens, wrapCardFreeText } from "../lib/registry-card.js";
 import { boundModelText } from "../lib/model-text.js";
+import { MAX_DOMAIN_CHARS } from "../lib/input-limits.js";
 
 export function registerStatus(server: McpServer) {
   server.registerTool(
@@ -15,6 +16,7 @@ export function registerStatus(server: McpServer) {
       inputSchema: {
         domain: z
           .string()
+          .max(MAX_DOMAIN_CHARS)
           .describe("The agent domain to check, e.g. ticki.adkgo.viz"),
       },
     },
