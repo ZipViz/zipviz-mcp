@@ -226,13 +226,57 @@ describe("a remote verdict cannot manufacture a locally verified receipt", () =>
         behaviourFetchFn: null,
       });
 
-      expect(a.reply_verified).toBe(true);
-      expect(a.reply_signing_version).toBe(2);
+      // The receipt is proven and attached, but it signs no reply text, so the
+      // text is reported as unverified.
+      expect(a.reply_verified).toBe(false);
+      expect(a.reply_failure_reason).toBe("reply_text_unsigned");
+      expect(a.reply_signing_version).toBeNull();
       expect(a.receipt).toEqual({
         status: "ACCEPTED",
         msg_id: SENT_MSG_ID,
         received_at: "2026-08-22T01:00:01.000Z",
       });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("never verifies reply text from a receipt: the same receipt beside two different texts", async () => {
+    // A v2 receipt signs the receipt fields only. Pair one genuine receipt with
+    // two different reply strings: neither may read as verified text, and the
+    // text must not change the attestation at all.
+    const { pubkeyHex, cleanup } = await withRecipientKey();
+    try {
+      const receipt = await signReceipt({
+        recipient: R,
+        sender: SENDER,
+        msg_id: SENT_MSG_ID,
+        received_at: "2026-08-22T01:00:01.000Z",
+        timestamp: "2026-08-22T01:00:01.000Z",
+        nonce: "0123456789abcdef",
+        owner_relationship: "SAME_OWNER",
+      });
+      const attestWith = async (replyText: string) => {
+        const response = reply({ ...receipt, kind: "receipt" }) as never;
+        return attestReply({
+          recipientDomain: R,
+          replyText,
+          response,
+          verifyFn: localV2ReceiptVerifyFn(pubkeyHex, response, {
+            msg_id: SENT_MSG_ID,
+            to: SENDER,
+          }),
+          behaviourFetchFn: null,
+        });
+      };
+      const a = await attestWith("the meeting is at 10");
+      const b = await attestWith("the meeting is cancelled");
+      for (const att of [a, b]) {
+        expect(att.reply_verified).toBe(false);
+        expect(att.reply_failure_reason).toBe("reply_text_unsigned");
+        expect(att.receipt?.msg_id).toBe(SENT_MSG_ID);
+      }
+      expect(a).toEqual(b);
     } finally {
       await cleanup();
     }

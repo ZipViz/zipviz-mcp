@@ -262,9 +262,9 @@ export function registerSend(server: McpServer) {
           const cappedBody = bodyTruncated
             ? bodyText + "…[truncated]"
             : bodyText;
-          const detail = cappedBody
-            ? "\n" + wrapUntrusted(domain, cappedBody)
-            : ` ${res.statusText}`.trimEnd();
+          // With no body, report the status code alone: the reason phrase is
+          // recipient-chosen text and would reach the model unframed.
+          const detail = cappedBody ? "\n" + wrapUntrusted(domain, cappedBody) : "";
           return {
             content: [
               {
@@ -367,8 +367,9 @@ export function registerSend(server: McpServer) {
         .join("\n");
 
       // Preserve + verify the recipient's signed reply, if it attached
-      // one. Verification proves provenance/integrity of the reply text — it
-      // does NOT make the text safe to act on, so `response` stays wrapped as
+      // one. A signed reply proves provenance/integrity of the reply text; a
+      // v2 receipt proves only that the recipient accepted this message and
+      // leaves the text unverified. Neither makes the text safe to act on, so `response` stays wrapped as
       // untrusted below regardless of the attestation. attestReply fails closed
       // and never throws, so a verification hiccup can't abort a send that
       // otherwise succeeded. We verify the RAW `responseText` (what the
@@ -381,8 +382,8 @@ export function registerSend(server: McpServer) {
           ? {
               // Bind the receipt to THIS send: it must name the msg_id we just
               // minted and the identity we sent as, or a recipient replaying an
-              // old receipt would get reply_verified:true for a message it
-              // never accepted.
+              // old receipt would get an ACCEPTED receipt for a message it
+              // never accepted. The receipt never verifies the reply text.
               verifyFn: localV2ReceiptVerifyFn(
                 card.public_key,
                 response,

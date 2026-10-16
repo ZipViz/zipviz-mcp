@@ -1,4 +1,5 @@
 import { sameVizIdentity } from "../lib/viz-domain.js";
+import { readJsonBounded } from "../lib/bounded-json.js";
 import {
   projectProducerReputation,
   tickMatchesReputation,
@@ -235,7 +236,7 @@ async function fetchBehaviour(
   };
   let parsed: unknown;
   try {
-    parsed = await res.json();
+    parsed = await readJsonBounded(res);
   } catch {
     // A 200 carrying something unparseable is a proxy interstitial or a
     // truncated body, not a statement about the agent.

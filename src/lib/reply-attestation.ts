@@ -3,6 +3,7 @@ import { extractReplyMetadata, type VerifyFn, type VerifyRequest } from "./a2a-r
 import { provenReceipt } from "../core/receipts.js";
 import { canonicalVizDomain, sameVizIdentity } from "./viz-domain.js";
 import { boundModelText } from "./model-text.js";
+import { readJsonBounded } from "./bounded-json.js";
 import { validateRemoteFailure, validateRemoteSuccess, VERIFY_FAILURE_CODES_BY_STATUS } from "./verify-contract.js";
 
 // Re-exported so existing importers keep one entry point. `RECEIPT_PROOF` is
@@ -40,7 +41,8 @@ export type ReplyFailureReason =
   | "identity_mismatch"
   | "signature_invalid"
   | "verdict_off_contract"
-  | "verify_unavailable";
+  | "verify_unavailable"
+  | "reply_text_unsigned";
 
 export interface ReplyAttestation {
   reply_verified: boolean;
@@ -63,6 +65,9 @@ export interface ReplyAttestation {
   // Present iff reply_verified === false. Bounded, machine-readable.
   reply_failure_reason?: string;
   // Present only when a v2 ACCEPTED receipt verified. Never on the v1 path.
+  // A receipt proves the recipient accepted THIS message; it signs no reply
+  // text, so an attestation carrying one always has reply_verified: false
+  // with reason "reply_text_unsigned".
   receipt?: {
     status: "ACCEPTED";
     msg_id: string;
@@ -105,7 +110,7 @@ async function defaultVerify(
     });
     let parsed: unknown;
     try {
-      parsed = await res.json();
+      parsed = await readJsonBounded(res);
     } catch {
       return null;
     }
@@ -293,8 +298,28 @@ export async function attestReply(params: {
     if (!sameVizIdentity(vr.identity, meta.from)) {
       return fail("identity_mismatch", claimedFrom);
     }
-    verifiedVersion = 2;
-    contractTick = "unknown";
+    // The receipt is genuine, but its signature covers the receipt fields
+    // (from, to, msg_id, status, nonce, timestamps) and nothing else. The
+    // reply text beside it is unsigned, so the same receipt would verify next
+    // to any text at all. Report the proven receipt and say plainly that the
+    // text is not verified, rather than letting the receipt stand in for it.
+    //
+    // A receipt is attached ONLY when the verifier hands us one it proved.
+    //
+    // This used to gate on `verifiedVersion === 2` and then rebuild the receipt
+    // from the metadata block. Both halves were wrong. A scalar cannot stand in
+    // for a signature check performed in another module, so a remote verdict
+    // claiming version 2 produced an ACCEPTED receipt with an attacker-chosen
+    // `msg_id`; and re-deriving the fields from unverified metadata meant the
+    // values attached were never the values checked.
+    //
+    // Now the proof and the receipt travel together, under a symbol key a JSON
+    // body cannot carry, set only by `localV2ReceiptVerifyFn` after it has
+    // verified the signature and bound `msg_id`/`to` to this send. `provenReceipt`
+    // is the only way to read it and there is no exported way to write it — the
+    // symbol used to be exported from `types.ts`, so any in-process caller could
+    // import it and attach any receipt it liked.
+    return { ...fail("reply_text_unsigned", claimedFrom), receipt: proven };
   } else {
     const contract = validateRemoteSuccess(vr);
     if (!contract.ok) return fail("verdict_off_contract", claimedFrom);
@@ -356,22 +381,6 @@ export async function attestReply(params: {
     reply_signing_version: verifiedVersion,
     ...(behaviour ? { reply_behaviour: behaviour } : {}),
   };
-  // A receipt is attached ONLY when the verifier hands us one it proved.
-  //
-  // This used to gate on `verifiedVersion === 2` and then rebuild the receipt
-  // from the metadata block. Both halves were wrong. A scalar cannot stand in
-  // for a signature check performed in another module, so a remote verdict
-  // claiming version 2 produced an ACCEPTED receipt with an attacker-chosen
-  // `msg_id`; and re-deriving the fields from unverified metadata meant the
-  // values attached were never the values checked.
-  //
-  // Now the proof and the receipt travel together, under a symbol key a JSON
-  // body cannot carry, set only by `localV2ReceiptVerifyFn` after it has
-  // verified the signature and bound `msg_id`/`to` to this send. `provenReceipt`
-  // is the only way to read it and there is no exported way to write it — the
-  // symbol used to be exported from `types.ts`, so any in-process caller could
-  // import it and attach any receipt it liked.
-  if (proven) attestation.receipt = proven;
   return attestation;
 }
 

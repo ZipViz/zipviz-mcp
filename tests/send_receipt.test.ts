@@ -163,11 +163,14 @@ describe("zipviz_send envelope_v=2 + local receipt verify", () => {
     expect(JSON.stringify(result.content[0].text)).not.toMatch(zipviz.signature);
 
     const payload = JSON.parse(result.content[0].text);
+    // The receipt verifies and is attached; the reply text it travels with is
+    // unsigned, so it is not reported as verified.
     expect(
       payload.reply_attestation.reply_verified,
       JSON.stringify(payload.reply_attestation)
-    ).toBe(true);
-    expect(payload.reply_attestation.reply_signing_version).toBe(2);
+    ).toBe(false);
+    expect(payload.reply_attestation.reply_failure_reason).toBe("reply_text_unsigned");
+    expect(payload.reply_attestation.reply_signing_version).toBeNull();
     expect(payload.reply_attestation.receipt).toEqual({
       status: "ACCEPTED",
       msg_id: zipviz.msg_id,
@@ -471,7 +474,8 @@ describe("zipviz_send envelope_v=2 + local receipt verify", () => {
       }),
       behaviourFetchFn: null,
     });
-    expect(proven.reply_verified).toBe(true);
+    expect(proven.reply_verified).toBe(false);
+    expect(proven.reply_failure_reason).toBe("reply_text_unsigned");
     expect(proven.receipt?.msg_id).toBe(realMsgId);
     expect(JSON.stringify(proven.receipt)).not.toContain("forged");
   });
