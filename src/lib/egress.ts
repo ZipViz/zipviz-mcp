@@ -256,10 +256,14 @@ export async function assertSafeEgressUrl(
 
 // A Node `lookup` that can only ever answer with the validated addresses. It
 // refuses any other hostname outright, so it cannot be reused for a different
-// target, and it never consults DNS.
+// target, and it never consults DNS. It answers on a later tick, as
+// `dns.lookup` does: a synchronous answer lets a connect that fails at once
+// (no route, for instance) report its error before the HTTP client has
+// attached its socket listeners.
 export function pinnedLookup(target: ValidatedTarget): LookupFunction {
   return ((hostname: string, options: unknown, callback: (...args: unknown[]) => void) => {
-    const cb = typeof options === "function" ? (options as typeof callback) : callback;
+    const done = typeof options === "function" ? (options as typeof callback) : callback;
+    const cb = (...args: unknown[]) => process.nextTick(() => done(...args));
     const opts = (typeof options === "object" && options !== null ? options : {}) as {
       family?: number | string;
       all?: boolean;

@@ -150,27 +150,31 @@ describe("safeEgressFetch pinning", () => {
   });
 
   it("uses the pinned transport by default, never the global fetch", async () => {
-    // 192.0.2.1 is reserved for documentation (RFC 5737): it passes the public
-    // check and routes nowhere, so the attempt is aborted after a moment. What
-    // matters is which transport made it.
+    // Fully offline: the validation hook hands back a target pinned to a local
+    // listener, so the only way that listener sees a connection is through the
+    // default pinned transport. The global fetch is a spy that must stay unused.
     const globalFetch = vi.fn(async () => new Response("should not be used"));
     vi.stubGlobal("fetch", globalFetch);
+    let connected = false;
+    const server = createServer((socket: Socket) => {
+      connected = true;
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
     try {
-      const controller = new AbortController();
-      setTimeout(() => controller.abort(), 100);
+      const host = "default-transport.invalid";
       await expect(
-        safeEgressFetch(
-          "https://default-transport.example/a2a",
-          { ...post, signal: controller.signal },
-          {
-            lookupFn: async () => [{ address: "192.0.2.1", family: 4 }],
-            bodyPolicy: { mode: "cancel" },
-          }
-        )
+        safeEgressFetch(`https://${host}:${port}/a2a`, post, {
+          assertEgress: async () => ({ hostname: host, addresses: [{ address: "127.0.0.1", family: 4 }] }),
+          bodyPolicy: { mode: "cancel" },
+        })
       ).rejects.toThrow();
+      expect(connected, "the default transport reached the pinned address").toBe(true);
       expect(globalFetch).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 
