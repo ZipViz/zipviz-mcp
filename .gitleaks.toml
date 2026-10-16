@@ -1,0 +1,4 @@
+title = "zipviz-mcp secret scanning"
+
+[extend]
+useDefault = true

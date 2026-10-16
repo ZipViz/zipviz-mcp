@@ -1,0 +1,71 @@
+{
+  "name": "zipviz-mcp",
+  "version": "1.1.0",
+  "private": true,
+  "description": "MCP server wrapping the ZipViz agent registry API",
+  "license": "Apache-2.0",
+  "author": "Elusor",
+  "homepage": "https://github.com/ZipViz/zipviz-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZipViz/zipviz-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ZipViz/zipviz-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "zipviz",
+    "agent-identity",
+    "ed25519"
+  ],
+  "engines": {
+    "node": ">=22.13.0 <23 || >=23.4.0"
+  },
+  "type": "module",
+  "bin": {
+    "zipviz-mcp": "./dist/stdio.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "tsc && chmod +x dist/stdio.js",
+    "dev": "tsx src/stdio.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vitest": "4.1.11"
+  },
+  "overrides": {
+    "@hono/node-server": "1.19.15",
+    "@types/estree": "1.0.8",
+    "chai": "6.2.2",
+    "fast-uri": "3.1.8",
+    "hono": "4.13.7",
+    "ip-address": "10.7.1",
+    "nanoid": "3.3.18",
+    "postcss": "8.5.23",
+    "proxy-addr": "2.0.8",
+    "qs": "6.16.0",
+    "rollup": "4.60.1",
+    "source-map-js": "1.2.2",
+    "std-env": "4.2.0",
+    "tinyrainbow": "3.1.1",
+    "vite": "7.3.5",
+    "vitest": "4.1.11"
+  }
+}
