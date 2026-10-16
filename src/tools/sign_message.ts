@@ -19,7 +19,7 @@ import {
   type ConversationWire,
   type WakeCapabilityConfig,
 } from "../core/conversation-wire.js";
-import { MAX_DOMAIN_CHARS, MAX_TIMESTAMP_CHARS, MESSAGE_TOO_LARGE, fitsMessageBudget } from "../lib/input-limits.js";
+import { MAX_DOMAIN_CHARS, MAX_TIMESTAMP_CHARS } from "../lib/input-limits.js";
 
 export interface SignMessageInput {
   viz_domain: string;
@@ -316,10 +316,7 @@ export function registerSignMessage(server: McpServer) {
           .describe(
             "The .viz domain that owns the signing key, e.g. claudais.smc.viz"
           ),
-        message: z
-          .string()
-          .refine(fitsMessageBudget, MESSAGE_TOO_LARGE)
-          .describe("The message content to sign (UTF-8)"),
+        message: z.string().describe("The message content to sign (UTF-8)"),
         key_path: z
           .string()
           .optional()

@@ -3,8 +3,9 @@
 // Every argument reaches a tool from the MCP client, and the schema is the
 // first thing that sees it. These tests hold the limits in place: an oversized
 // argument is refused before the handler runs (so before any signing, hashing,
-// filesystem access or network call), a value at the limit still gets through,
-// and the stdio transport refuses a frame larger than MAX_FRAME_BYTES.
+// filesystem access or network call) and is never truncated to fit, a value at
+// the limit still gets through, and the stdio transport refuses a frame larger
+// than MAX_FRAME_BYTES.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -19,10 +20,10 @@ import { createClientServer } from "../src/server-core.js";
 import {
   MAX_DOMAIN_CHARS,
   MAX_FRAME_BYTES,
-  MAX_MESSAGE_BYTES,
+  MAX_SEND_MESSAGE_BYTES,
   MAX_SIGNATURE_CHARS,
   MAX_TIMESTAMP_CHARS,
-  fitsMessageBudget,
+  fitsSendMessage,
 } from "../src/lib/input-limits.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -40,13 +41,39 @@ function text(result: ToolResult): string {
   return result.content.map((c) => c.text ?? "").join("\n");
 }
 
-describe("fitsMessageBudget", () => {
-  it("counts UTF-8 bytes, not characters", () => {
-    expect(fitsMessageBudget("a".repeat(MAX_MESSAGE_BYTES))).toBe(true);
-    expect(fitsMessageBudget("a".repeat(MAX_MESSAGE_BYTES + 1))).toBe(false);
-    // "é" is two bytes: half the budget in characters is exactly the limit.
-    expect(fitsMessageBudget("é".repeat(MAX_MESSAGE_BYTES / 2))).toBe(true);
-    expect(fitsMessageBudget("é".repeat(MAX_MESSAGE_BYTES / 2 + 1))).toBe(false);
+/** `count` copies of `ch`, plus the UTF-8 byte length of the result. */
+function repeat(ch: string, count: number): { value: string; bytes: number } {
+  const value = ch.repeat(count);
+  return { value, bytes: Buffer.byteLength(value, "utf8") };
+}
+
+describe("send message limit", () => {
+  it("is 32 KiB", () => {
+    expect(MAX_SEND_MESSAGE_BYTES).toBe(32768);
+  });
+
+  // One case per UTF-8 width, each exactly at the limit and one character over.
+  it.each([
+    ["1-byte (a)", "a", 1],
+    ["2-byte (é)", "é", 2],
+    ["3-byte (€)", "€", 3],
+    ["4-byte (😀, two UTF-16 units)", "😀", 4],
+  ])("counts UTF-8 bytes for %s characters", (_label, ch, width) => {
+    const atLimit = repeat(ch, Math.floor(MAX_SEND_MESSAGE_BYTES / width));
+    const over = repeat(ch, Math.floor(MAX_SEND_MESSAGE_BYTES / width) + 1);
+    expect(atLimit.bytes).toBeLessThanOrEqual(MAX_SEND_MESSAGE_BYTES);
+    expect(over.bytes).toBeGreaterThan(MAX_SEND_MESSAGE_BYTES);
+    expect(fitsSendMessage(atLimit.value)).toBe(true);
+    expect(fitsSendMessage(over.value)).toBe(false);
+  });
+
+  it("refuses a message one byte over even when its character count is well under", () => {
+    // 16,383 two-byte characters plus two ASCII bytes: 32,768 bytes fits,
+    // a third ASCII byte makes 32,769.
+    const base = "é".repeat(16383);
+    expect(fitsSendMessage(base + "aa")).toBe(true);
+    expect(fitsSendMessage(base + "aaa")).toBe(false);
+    expect((base + "aaa").length).toBeLessThan(MAX_SEND_MESSAGE_BYTES);
   });
 });
 
@@ -58,7 +85,7 @@ describe("tool argument limits", () => {
 
   beforeEach(async () => {
     // No key exists under this HOME, and the global fetch is a spy: a call that
-    // got past the schema would show up as a key error or a fetch, not silently.
+    // got past the schema shows up as a key error or a fetch, never silently.
     home = mkdtempSync(join(tmpdir(), "zipviz-limits-"));
     savedHome = process.env.HOME;
     process.env.HOME = home;
@@ -76,7 +103,7 @@ describe("tool argument limits", () => {
   });
 
   const longDomain = "a".repeat(MAX_DOMAIN_CHARS - 4) + "x.viz"; // one over the limit
-  const bigMessage = "a".repeat(MAX_MESSAGE_BYTES + 1);
+  const overSend = "a".repeat(MAX_SEND_MESSAGE_BYTES + 1);
   const ts = "2026-10-16T00:00:00.000Z";
 
   const oversized: Array<[string, Record<string, unknown>]> = [
@@ -84,8 +111,6 @@ describe("tool argument limits", () => {
     ["zipviz_status", { domain: longDomain }],
     ["zipviz_send", { domain: longDomain, message: "hi", as: "me.smc.viz" }],
     ["zipviz_send", { domain: "ticki.adkgo.viz", message: "hi", as: longDomain }],
-    ["zipviz_send", { domain: "ticki.adkgo.viz", message: bigMessage, as: "me.smc.viz" }],
-    ["zipviz_verify", { domain: "ticki.adkgo.viz", message: bigMessage, timestamp: ts, signature: "s" }],
     [
       "zipviz_verify",
       { domain: "ticki.adkgo.viz", message: "hi", timestamp: "2".repeat(MAX_TIMESTAMP_CHARS + 1), signature: "s" },
@@ -95,7 +120,6 @@ describe("tool argument limits", () => {
       { domain: "ticki.adkgo.viz", message: "hi", timestamp: ts, signature: "A".repeat(MAX_SIGNATURE_CHARS + 1) },
     ],
     ["zipviz_sign_message", { viz_domain: longDomain, message: "hi" }],
-    ["zipviz_sign_message", { viz_domain: "me.smc.viz", message: bigMessage }],
     ["zipviz_sign_message", { viz_domain: "me.smc.viz", message: "hi", timestamp: "2".repeat(MAX_TIMESTAMP_CHARS + 1) }],
   ];
 
@@ -107,15 +131,48 @@ describe("tool argument limits", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("lets a message at exactly the byte limit through to the handler", async () => {
-    // The handler runs and stops at the missing key, which proves the schema
-    // accepted a full-size message.
+  it("refuses a send message one byte over with a clear error, and sends nothing", async () => {
+    const result = (await client.callTool({
+      name: "zipviz_send",
+      arguments: { domain: "ticki.adkgo.viz", message: overSend, as: "me.smc.viz" },
+    })) as ToolResult;
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain(`message must be at most ${MAX_SEND_MESSAGE_BYTES} bytes of UTF-8 text`);
+    // Refused outright: no lookup, no signing, no send of a shortened copy.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("lets a send message of exactly 32 KiB through to the handler", async () => {
+    // 8,192 four-byte characters: exactly the limit in bytes, half of it in
+    // UTF-16 units. The handler runs and reaches the registry lookup (the
+    // fetch spy answers 500), which proves the schema accepted it.
+    const atLimit = "😀".repeat(MAX_SEND_MESSAGE_BYTES / 4);
+    expect(Buffer.byteLength(atLimit, "utf8")).toBe(MAX_SEND_MESSAGE_BYTES);
+    const result = (await client.callTool({
+      name: "zipviz_send",
+      arguments: { domain: "ticki.adkgo.viz", message: atLimit, as: "me.smc.viz" },
+    })) as ToolResult;
+    expect(text(result)).not.toMatch(/Input validation error/i);
+    expect(fetchSpy).toHaveBeenCalled();
+  });
+
+  it("does not apply the send limit to signing", async () => {
+    // Signing is local and not addressed to a receiver; only the frame bounds
+    // it. The handler runs and stops at the missing key.
     const result = (await client.callTool({
       name: "zipviz_sign_message",
-      arguments: { viz_domain: "me.smc.viz", message: "é".repeat(MAX_MESSAGE_BYTES / 2) },
+      arguments: { viz_domain: "me.smc.viz", message: overSend },
     })) as ToolResult;
     expect(text(result)).not.toMatch(/Input validation error/i);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not apply the send limit to verification", async () => {
+    const result = (await client.callTool({
+      name: "zipviz_verify",
+      arguments: { domain: "ticki.adkgo.viz", message: overSend, timestamp: ts, signature: "s" },
+    })) as ToolResult;
+    expect(text(result)).not.toMatch(/Input validation error/i);
   });
 });
 
@@ -125,13 +182,16 @@ describe("stdio frame limit", () => {
     expect(source).toMatch(/maxBufferSize:\s*MAX_FRAME_BYTES/);
   });
 
-  it("holds a full-size message even when every character needs escaping", () => {
+  it("holds a full-size send message even when every character needs escaping", () => {
     // A control character serializes as \uXXXX, six bytes for one byte of text.
     const frame = JSON.stringify({
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
-      params: { name: "zipviz_sign_message", arguments: { viz_domain: "me.smc.viz", message: "\u0001".repeat(MAX_MESSAGE_BYTES) } },
+      params: {
+        name: "zipviz_send",
+        arguments: { domain: "ticki.adkgo.viz", as: "me.smc.viz", message: "\u0001".repeat(MAX_SEND_MESSAGE_BYTES) },
+      },
     });
     expect(Buffer.byteLength(frame) + 1).toBeLessThan(MAX_FRAME_BYTES);
   });
