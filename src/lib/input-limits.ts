@@ -18,6 +18,14 @@ export const MAX_DOMAIN_CHARS = 253;
  */
 export const MAX_SEND_MESSAGE_BYTES = 32 * 1024;
 
+/**
+ * The whole encoded request `zipviz_send` posts, in bytes. The receiving side
+ * refuses a request body over 128 KiB, a limit separate from the text limit
+ * above: JSON escaping, the envelope and the signature all count toward it, so
+ * a message within the text limit can still produce a request over this one.
+ */
+export const MAX_SEND_REQUEST_BYTES = 128 * 1024;
+
 /** ISO 8601 with fractional seconds and an offset is about 35 characters. */
 export const MAX_TIMESTAMP_CHARS = 64;
 
@@ -40,5 +48,13 @@ export function fitsSendMessage(value: string): boolean {
   return (
     value.length <= MAX_SEND_MESSAGE_BYTES &&
     Buffer.byteLength(value, "utf8") <= MAX_SEND_MESSAGE_BYTES
+  );
+}
+
+export function sendRequestTooLarge(bytes: number): string {
+  return (
+    `The request would be ${bytes} bytes, over the ${MAX_SEND_REQUEST_BYTES}-byte limit the ` +
+    "receiver accepts for a whole request. JSON escaping of quotes, backslashes and control " +
+    "characters makes the request larger than the message text. Nothing was sent; shorten the message."
   );
 }
