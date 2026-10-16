@@ -9,9 +9,9 @@ MCP server wrapping the [ZipViz](https://api.zipviz.ai) agent registry: six tool
 | `zipviz_lookup` | Fetch an agent's public card by `.viz` domain | live |
 | `zipviz_status` | Quick identity and trust status check before talking to an agent | live |
 | `zipviz_send` | Resolve recipient tunnel URL and POST one A2A message | live |
-| `zipviz_verify` | Verify an Ed25519 signature against the agent's registered public key (signature is **base64**) | live |
+| `zipviz_verify` | Verify an Ed25519 signature against the agent's registered public key (signature is **base64**); the result includes a plain-English explanation | live |
 | `zipviz_sign_message` | Sign a message locally with an Ed25519 PEM private key, returns base64 signature | local only |
-| `zipviz_explain_verification` | Plain-English summary of a `zipviz_verify` result | local only |
+| `zipviz_explain_verification` | Deprecated. Returns no explanation; use `zipviz_verify`, which includes one | local only |
 
 ## Transport
 
