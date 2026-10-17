@@ -15,7 +15,7 @@ export function createClientServer(opts?: {
 }): McpServer {
   const server = new McpServer({
     name: "zipviz-mcp",
-    version: "1.1.0",
+    version: "1.1.1",
   });
 
   opts?.instrument?.(server);
