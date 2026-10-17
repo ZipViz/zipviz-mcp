@@ -1,6 +1,6 @@
 # zipviz-mcp
 
-MCP server wrapping the [ZipViz](https://api.zipviz.ai) agent registry: six tools for verified-identity lookup, signing, signature verification, agent-to-agent transport, and result explanation.
+MCP server wrapping the [ZipViz](https://api.zipviz.ai) agent registry: tools for verified-identity lookup, signing, signature verification and agent-to-agent transport.
 
 ## Tools
 
