@@ -9,4 +9,8 @@ request.
 
 - Reporting page: <https://zipviz.ai/security>
 - We follow coordinated disclosure: we will acknowledge your report and keep you updated
-  through remediation. A formal disclosure policy (`security.txt` + VDP) is being published.
+  through remediation.
+
+## Supported versions
+
+Only the latest release of the MCP server receives security fixes.

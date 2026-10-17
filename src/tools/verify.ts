@@ -4,6 +4,7 @@ import { validateRemoteFailure, validateRemoteSuccess } from "../lib/verify-cont
 import type { ProducerReputation } from "../lib/producer-reputation.js";
 import { isValidVizDomain, sameVizIdentity } from "../lib/viz-domain.js";
 import { explainVerification } from "./explain_verification.js";
+import { readJsonBounded } from "../lib/bounded-json.js";
 
 const VERIFY_URL = "https://api.zipviz.ai/v1/verify";
 
@@ -80,7 +81,7 @@ export async function verifyMessage(params: {
   // is; `as VerifyResponse` would be an assertion about a stranger's JSON.
   let body: unknown;
   try {
-    body = await res.json();
+    body = await readJsonBounded(res);
   } catch {
     return { verified: "unknown", domain, unavailable_reason: "unparseable" };
   }

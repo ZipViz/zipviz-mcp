@@ -9,21 +9,36 @@
 //
 // This module refuses https URLs whose host is — or resolves to — a private,
 // loopback, link-local, CGNAT, ULA, multicast, or otherwise non-public
-// address, and refuses obvious internal hostnames. The DNS resolution step is
-// resolve-time only: it is NOT a pinned-IP connection, so an active
-// DNS-rebinding attacker could still flip the address between this check and
-// the actual fetch. Connection pinning is a deliberate follow-up.
+// address, and refuses obvious internal hostnames.
+//
+// The addresses that pass that check are the only ones the connection may use.
+// `pinnedHttpsFetch` hands Node a lookup that answers with exactly those
+// validated addresses, so a second DNS answer between the check and the
+// connection (DNS rebinding) cannot redirect the request. The hostname still
+// drives TLS: SNI and certificate verification are against the name in the URL.
+// Every redirect hop is validated and pinned afresh, connections are never
+// reused across hops, and the DNS step sits inside the caller's abort signal.
 
-import { isIP } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
 import { lookup as dnsLookup } from "node:dns/promises";
+import type { LookupAddress } from "node:dns";
+import { request as httpsRequest } from "node:https";
+import { Readable } from "node:stream";
 
 export type LookupFn = (
   hostname: string
 ) => Promise<Array<{ address: string; family: number }>>;
 
+/** A host that passed the egress check, with the only addresses it may connect to. */
+export type ValidatedTarget = {
+  hostname: string;
+  addresses: Array<{ address: string; family: 4 | 6 }>;
+};
+
 export type EgressFetchFn = (
   url: string,
-  init?: RequestInit
+  init: RequestInit,
+  target: ValidatedTarget
 ) => Promise<Response>;
 
 export type EgressBodyPolicy =
@@ -169,7 +184,7 @@ function isBlockedHostname(host: string): boolean {
 export async function assertSafeEgressUrl(
   rawUrl: string,
   lookupFn: LookupFn = defaultLookup
-): Promise<void> {
+): Promise<ValidatedTarget> {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -195,13 +210,14 @@ export async function assertSafeEgressUrl(
     throw new EgressBlockedError("Refusing to connect: URL has no hostname.");
   }
 
-  if (isIP(host) !== 0) {
+  const literalFamily = isIP(host);
+  if (literalFamily !== 0) {
     if (isBlockedAddress(host)) {
       throw new EgressBlockedError(
         "Refusing to connect to a private, loopback, or link-local address."
       );
     }
-    return;
+    return { hostname: host, addresses: [{ address: host, family: literalFamily as 4 | 6 }] };
   }
 
   if (isBlockedHostname(host)) {
@@ -210,7 +226,7 @@ export async function assertSafeEgressUrl(
     );
   }
 
-  let addrs: Array<{ address: string }>;
+  let addrs: Array<{ address: string; family: number }>;
   try {
     addrs = await lookupFn(host);
   } catch {
@@ -225,13 +241,159 @@ export async function assertSafeEgressUrl(
       "Refusing to connect: DNS resolution returned no addresses."
     );
   }
+  const validated: ValidatedTarget["addresses"] = [];
   for (const a of addrs) {
-    if (isBlockedAddress(a.address)) {
+    const family = isIP(a.address);
+    if (family === 0 || isBlockedAddress(a.address)) {
       throw new EgressBlockedError(
         "Refusing to connect: hostname resolves to a private, loopback, or link-local address."
       );
     }
+    validated.push({ address: a.address, family: family as 4 | 6 });
   }
+  return { hostname: host, addresses: validated };
+}
+
+// A Node `lookup` that can only ever answer with the validated addresses. It
+// refuses any other hostname outright, so it cannot be reused for a different
+// target, and it never consults DNS. It answers on a later tick, as
+// `dns.lookup` does: a synchronous answer lets a connect that fails at once
+// (no route, for instance) report its error before the HTTP client has
+// attached its socket listeners.
+export function pinnedLookup(target: ValidatedTarget): LookupFunction {
+  return ((hostname: string, options: unknown, callback: (...args: unknown[]) => void) => {
+    const done = typeof options === "function" ? (options as typeof callback) : callback;
+    const cb = (...args: unknown[]) => process.nextTick(() => done(...args));
+    const opts = (typeof options === "object" && options !== null ? options : {}) as {
+      family?: number | string;
+      all?: boolean;
+    };
+    const asked = hostname.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.$/, "");
+    if (asked !== target.hostname.toLowerCase().replace(/\.$/, "")) {
+      const err = Object.assign(new Error("pinned lookup refused an unvalidated hostname"), {
+        code: "ENOTFOUND",
+      });
+      cb(err, "", 0);
+      return;
+    }
+    const family = opts.family === "IPv4" ? 4 : opts.family === "IPv6" ? 6 : Number(opts.family ?? 0);
+    const usable = family === 4 || family === 6
+      ? target.addresses.filter((a) => a.family === family)
+      : target.addresses;
+    if (usable.length === 0) {
+      const err = Object.assign(new Error("no validated address for the requested family"), {
+        code: "ENOTFOUND",
+      });
+      cb(err, "", 0);
+      return;
+    }
+    if (opts.all) {
+      cb(null, usable.map((a): LookupAddress => ({ address: a.address, family: a.family })));
+      return;
+    }
+    cb(null, usable[0].address, usable[0].family);
+  }) as LookupFunction;
+}
+
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
+// One HTTPS request whose connection may only reach `target`'s validated
+// addresses. No connection pooling (`agent: false`), so a later hop or a later
+// send can never inherit a socket opened for another name.
+export function pinnedHttpsFetch(
+  rawUrl: string,
+  init: RequestInit,
+  target: ValidatedTarget
+): Promise<Response> {
+  const url = new URL(rawUrl);
+  if (url.protocol !== "https:") {
+    return Promise.reject(new EgressBlockedError("Refusing to connect: only https endpoints are allowed."));
+  }
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (host.toLowerCase() !== target.hostname.toLowerCase()) {
+    return Promise.reject(new EgressBlockedError("Refusing to connect: target was not validated for this host."));
+  }
+  if (init.body != null && typeof init.body !== "string") {
+    return Promise.reject(new TypeError("pinnedHttpsFetch only sends string bodies"));
+  }
+  const body = init.body ?? undefined;
+  const method = (init.method ?? "GET").toUpperCase();
+  const headers: Record<string, string> = {};
+  new Headers(init.headers).forEach((value, name) => {
+    headers[name] = value;
+  });
+  if (body !== undefined) headers["content-length"] = String(Buffer.byteLength(body));
+  const signal = init.signal ?? undefined;
+
+  return new Promise<Response>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException("This operation was aborted", "AbortError"));
+      return;
+    }
+    const req = httpsRequest(
+      {
+        protocol: "https:",
+        hostname: host,
+        port: url.port || 443,
+        path: `${url.pathname}${url.search}`,
+        method,
+        headers,
+        agent: false,
+        lookup: pinnedLookup(target),
+        servername: isIP(host) === 0 ? host : undefined,
+        signal,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        const responseHeaders = new Headers();
+        for (const [name, value] of Object.entries(res.headers)) {
+          if (value === undefined) continue;
+          if (Array.isArray(value)) for (const v of value) responseHeaders.append(name, v);
+          else responseHeaders.set(name, String(value));
+        }
+        const nullBody = method === "HEAD" || NULL_BODY_STATUSES.has(status);
+        try {
+          const response = new Response(
+            nullBody ? null : (Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>),
+            { status, headers: responseHeaders }
+          );
+          if (nullBody) res.resume();
+          resolve(response);
+        } catch (err) {
+          res.destroy();
+          reject(err);
+        }
+      }
+    );
+    req.on("error", reject);
+    if (body !== undefined) req.write(body);
+    req.end();
+  });
+}
+
+// Settle with the caller's abort as soon as it fires, even while `work` (a DNS
+// lookup, for instance) is still pending. The pending work is left to finish
+// on its own; its result is ignored.
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal | null | undefined): Promise<T> {
+  if (!signal) return work;
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new DOMException("This operation was aborted", "AbortError"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () =>
+      reject(signal.reason ?? new DOMException("This operation was aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      }
+    );
+  });
 }
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -359,26 +521,26 @@ function redirectedInit(
 
 // Fetch a registry-derived endpoint without ever letting the HTTP client own
 // redirects. Validation and use remain in this one helper: each exact URL is
-// parsed and resolved immediately before its manual fetch, every intermediate
-// body is cancelled, and the final body is either cancelled or streamed into a
-// fixed byte ceiling chosen by the caller.
-//
-// DNS validation is still resolve-time only. This does not pin the validated
-// address to the connection, so DNS rebinding remains explicit follow-up work.
+// parsed and resolved immediately before its manual fetch, the connection is
+// pinned to the addresses that validation accepted, every intermediate body is
+// cancelled, and the final body is either cancelled or streamed into a fixed
+// byte ceiling chosen by the caller. The caller's abort signal bounds the DNS
+// step as well as the request.
 export async function safeEgressFetch(
   rawUrl: string,
   init: RequestInit,
   opts: {
+    /** Transport. Defaults to `pinnedHttpsFetch`; it receives the validated target for each hop. */
     fetchFn?: EgressFetchFn;
     lookupFn?: LookupFn;
-    assertEgress?: (url: string) => Promise<void>;
+    assertEgress?: (url: string) => Promise<ValidatedTarget>;
     /** Synchronous final policy hook, called after URL validation before every fetch. */
     beforeFetch?: (url: string) => void;
     maxRedirects?: number;
     bodyPolicy: EgressBodyPolicy;
   }
 ): Promise<SafeEgressFetchResult> {
-  const fetchFn = opts.fetchFn ?? fetch;
+  const fetchFn: EgressFetchFn = opts.fetchFn ?? pinnedHttpsFetch;
   const assertEgress =
     opts.assertEgress ??
     ((url: string) => assertSafeEgressUrl(url, opts.lookupFn ?? defaultLookup));
@@ -395,9 +557,9 @@ export async function safeEgressFetch(
   };
 
   for (let redirects = 0; ; redirects += 1) {
-    await assertEgress(currentUrl);
+    const target = await untilAborted(assertEgress(currentUrl), currentInit.signal);
     opts.beforeFetch?.(currentUrl);
-    const response = await fetchFn(currentUrl, currentInit);
+    const response = await fetchFn(currentUrl, currentInit, target);
     if (!REDIRECT_STATUSES.has(response.status)) {
       if (opts.bodyPolicy.mode === "cancel") {
         await cancelResponseBody(response);
