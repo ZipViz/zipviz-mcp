@@ -1,7 +1,6 @@
 {
   "name": "zipviz-mcp",
   "version": "1.1.0",
-  "private": true,
   "description": "MCP server wrapping the ZipViz agent registry API",
   "license": "Apache-2.0",
   "author": "Elusor",
@@ -25,11 +24,12 @@
   },
   "type": "module",
   "bin": {
-    "zipviz-mcp": "./dist/stdio.js"
+    "zipviz-mcp": "dist/stdio.js"
   },
   "files": [
     "dist",
     "README.md",
+    "LICENSE",
     "NOTICE"
   ],
   "scripts": {
@@ -46,14 +46,16 @@
   },
   "devDependencies": {
     "@types/node": "^25.5.2",
-    "tsx": "^4.19.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.0",
     "vitest": "4.1.11"
   },
   "overrides": {
     "@hono/node-server": "1.19.15",
     "@types/estree": "1.0.8",
+    "body-parser": "2.3.0",
     "chai": "6.2.2",
+    "esbuild": "0.28.2",
     "fast-uri": "3.1.8",
     "hono": "4.13.7",
     "ip-address": "10.7.1",
@@ -65,7 +67,7 @@
     "source-map-js": "1.2.2",
     "std-env": "4.2.0",
     "tinyrainbow": "3.1.1",
-    "vite": "7.3.5",
+    "vite": "7.3.7",
     "vitest": "4.1.11"
   }
 }

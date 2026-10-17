@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { zipvizFetch } from "../lib/api.js";
 import type { AgentCard } from "../lib/types.js";
 import { cardFreeText, cardName, cardTokens, wrapCardFreeText } from "../lib/registry-card.js";
+import { MAX_DOMAIN_CHARS } from "../lib/input-limits.js";
 
 export function registerLookup(server: McpServer) {
   server.registerTool(
@@ -13,6 +14,7 @@ export function registerLookup(server: McpServer) {
       inputSchema: {
         domain: z
           .string()
+          .max(MAX_DOMAIN_CHARS)
           .describe("The agent domain to look up, e.g. ticki.adkgo.viz"),
       },
     },
