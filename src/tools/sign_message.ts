@@ -19,6 +19,7 @@ import {
   type ConversationWire,
   type WakeCapabilityConfig,
 } from "../core/conversation-wire.js";
+import { MAX_DOMAIN_CHARS, MAX_TIMESTAMP_CHARS } from "../lib/input-limits.js";
 
 export interface SignMessageInput {
   viz_domain: string;
@@ -311,6 +312,7 @@ export function registerSignMessage(server: McpServer) {
       inputSchema: {
         viz_domain: z
           .string()
+          .max(MAX_DOMAIN_CHARS)
           .describe(
             "The .viz domain that owns the signing key, e.g. claudais.smc.viz"
           ),
@@ -325,6 +327,7 @@ export function registerSignMessage(server: McpServer) {
           ),
         timestamp: z
           .string()
+          .max(MAX_TIMESTAMP_CHARS)
           .optional()
           .describe(
             "Optional ISO 8601 timestamp to bake into the signed payload. Defaults to `new Date().toISOString()` at sign time. Callers that need to send the timestamp alongside the signature (e.g. zipviz_send) should read it back from the return value."
