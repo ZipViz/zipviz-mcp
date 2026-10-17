@@ -2,6 +2,45 @@
 
 MCP server wrapping the [ZipViz](https://api.zipviz.ai) agent registry: tools for verified-identity lookup, signing, signature verification and agent-to-agent transport.
 
+Published on npm as [`zipviz-mcp`](https://www.npmjs.com/package/zipviz-mcp).
+
+## Quickstart
+
+Requires Node.js 22.13 or later. Each client starts the server with `npx`, so there is nothing to
+install first.
+
+**Claude Code:**
+
+```sh
+claude mcp add zipviz -- npx -y zipviz-mcp
+```
+
+**Claude Desktop:** add this to `claude_desktop_config.json` (Settings → Developer → Edit Config),
+then restart Claude Desktop.
+
+**Cursor:** add the same block to `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (one
+project).
+
+```json
+{
+  "mcpServers": {
+    "zipviz": {
+      "command": "npx",
+      "args": ["-y", "zipviz-mcp"]
+    }
+  }
+}
+```
+
+**First call:** ask your assistant to "use zipviz_lookup to look up zorro-her.smc.viz". The tool
+returns the agent card as JSON: name, tunnel URL, Ed25519 public key, protocols and
+authentication schemes. Any text the registrant wrote comes back in a separate block labelled
+untrusted.
+
+To sign messages with `zipviz_sign_message`, create a key with the
+[zipviz CLI](https://github.com/ZipViz/zipviz-cli) first (`npm install -g zipviz`, then
+`zipviz keygen`). Both use `~/.zipviz/keys/`.
+
 ## Tools
 
 | Tool | What it does | Network |
@@ -17,13 +56,14 @@ MCP server wrapping the [ZipViz](https://api.zipviz.ai) agent registry: tools fo
 
 | Bin | Transport | Use it for |
 |---|---|---|
-| `zipviz-mcp` | stdio | Claude Code, Claude Desktop, Codex CLI, Codex Desktop |
+| `zipviz-mcp` | stdio | Claude Code, Claude Desktop, Cursor, Codex CLI, Codex Desktop |
 
 The stdio bin is stdout-clean (only JSON-RPC frames on stdout).
 
-## Install / use
+## Development
 
 ```bash
+git clone https://github.com/ZipViz/zipviz-mcp && cd zipviz-mcp
 npm ci
 npm run build              # produces dist/stdio.js
 npm test                   # vitest
@@ -43,6 +83,12 @@ All tools call `https://api.zipviz.ai`. See `src/lib/types.ts` for the response 
 
 - Private keys for `zipviz_sign_message` default to `~/.zipviz/keys/<viz_domain>.key` and never leave the local machine. `key_path` is **rejected** and `viz_domain` must match a strict `.viz` regex, so the tool cannot act as a signing oracle for arbitrary local keys.
 - `zipviz_send` is intentionally a thin transport helper: no queues, retries, scheduling, or routing logic.
+
+## Related
+
+- [zipviz-cli](https://github.com/ZipViz/zipviz-cli): create a key, claim a name, and verify names and signatures from the command line.
+- [zipviz-openapi](https://github.com/ZipViz/zipviz-openapi): the OpenAPI specification of the public registry API.
+- [zipviz.ai/developers](https://zipviz.ai/developers)
 
 ## Contributing
 
