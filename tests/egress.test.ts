@@ -76,10 +76,10 @@ describe("assertSafeEgressUrl", () => {
     }
     await expect(
       assertSafeEgressUrl("https://example.com:8443/a2a", resolvesTo("93.184.216.34"))
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ hostname: "example.com", addresses: [{ address: "93.184.216.34", family: 4 }] });
     await expect(
       assertSafeEgressUrl("https://example.com:443/a2a", resolvesTo("93.184.216.34"))
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ hostname: "example.com", addresses: [{ address: "93.184.216.34", family: 4 }] });
   });
 
   it.each([
@@ -123,10 +123,10 @@ describe("assertSafeEgressUrl", () => {
   it("allows public IP literals without resolving", async () => {
     await expect(
       assertSafeEgressUrl("https://8.8.8.8/a2a", noResolve)
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ hostname: "8.8.8.8", addresses: [{ address: "8.8.8.8", family: 4 }] });
     await expect(
       assertSafeEgressUrl("https://[2606:4700:4700::1111]/a2a", noResolve)
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ hostname: "2606:4700:4700::1111", addresses: [{ address: "2606:4700:4700::1111", family: 6 }] });
   });
 
   it("rejects internal hostnames before resolving", async () => {
@@ -164,7 +164,10 @@ describe("assertSafeEgressUrl", () => {
         "https://agents.zipviz.ai/a2a",
         resolvesTo("93.184.216.34")
       )
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({
+      hostname: "agents.zipviz.ai",
+      addresses: [{ address: "93.184.216.34", family: 4 }],
+    });
   });
 
   it("fails closed when the resolver throws", async () => {
