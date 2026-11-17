@@ -5,6 +5,7 @@ import { isValidVizDomain } from "../lib/viz-domain.js";
 import type { A2AResponse, ProvenReceipt, VerifyResponse } from "../lib/types.js";
 import { extractReplyMetadata, type VerifyFn } from "../lib/a2a-reply.js";
 import { isCanonicalIsoTimestamp } from "../lib/iso-timestamp.js";
+import { isCanonicalEd25519Signature } from "../lib/ed25519-signature.js";
 
 /**
  * The proof that a receipt was verified HERE, by the code below, against a
@@ -139,6 +140,8 @@ export function verifyBoundReceipt(
   if (params.msg_id !== expected.msg_id || params.from !== expected.from || params.to !== expected.to ||
       params.conversation.id !== expected.conversation.id ||
       params.conversation.turn !== expected.conversation.turn ||
+      !isReceiptNonce(params.nonce) ||
+      !isReceiptSignature(params.signature) ||
       !isCanonicalIsoTimestamp(params.received_at) ||
       !isCanonicalIsoTimestamp(params.timestamp)) {
     return { ok: false, code: "E_RECEIPT_MISMATCH" };
@@ -151,6 +154,14 @@ export function verifyBoundReceipt(
   } catch {
     return { ok: false, code: "E_SIG_MISMATCH" };
   }
+}
+
+export function isReceiptNonce(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{16}$/.test(value);
+}
+
+export function isReceiptSignature(value: unknown): value is string {
+  return isCanonicalEd25519Signature(value);
 }
 
 export function mintReceiptNonce(): string {
@@ -239,6 +250,7 @@ export function localV2ReceiptVerifyFn(
       const meta = extractReplyMetadata(response);
       if (
         !meta ||
+        meta.v !== 2 ||
         meta.kind !== "receipt" ||
         meta.status !== "ACCEPTED" ||
         typeof meta.from !== "string" ||

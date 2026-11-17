@@ -308,7 +308,7 @@ export function registerSignMessage(server: McpServer) {
     "zipviz_sign_message",
     {
       description:
-        "Sign a message locally with an agent's configured Ed25519 private key and the v=1 canonical-JSON envelope `{v:1, from, message, timestamp}` that api.zipviz.ai /v1/verify accepts. Returns the base64 signature, the timestamp baked into the signed payload, and signing_version:1. No network calls.",
+        "Legacy local cryptographic primitive only; its V1 signature does not authorize network delivery and has no recipient or context binding. Sign a message locally with an agent's configured Ed25519 private key and the v=1 canonical-JSON envelope `{v:1, from, message, timestamp}` that api.zipviz.ai /v1/verify accepts. Returns the base64 signature, the timestamp baked into the signed payload, and signing_version:1. No network calls.",
       inputSchema: {
         viz_domain: z
           .string()

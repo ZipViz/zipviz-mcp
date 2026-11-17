@@ -196,6 +196,27 @@ describe("safeEgressFetch", () => {
     body: JSON.stringify({ jsonrpc: "2.0" }),
   } satisfies RequestInit;
 
+  it("awaits an asynchronous final policy hook before connecting", async () => {
+    const order: string[] = [];
+    const fetchFn = vi.fn(async () => {
+      order.push("fetch");
+      return new Response(null, { status: 204 });
+    });
+
+    await safeEgressFetch("https://public.example/a2a", post, {
+      fetchFn,
+      lookupFn: lookup,
+      beforeFetch: async () => {
+        order.push("policy:start");
+        await Promise.resolve();
+        order.push("policy:end");
+      },
+      bodyPolicy: { mode: "cancel" },
+    });
+
+    expect(order).toEqual(["policy:start", "policy:end", "fetch"]);
+  });
+
   it("blocks a public-to-private redirect before the private fetch", async () => {
     const fetchFn = vi.fn(async () =>
       new Response(null, {

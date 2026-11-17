@@ -103,6 +103,7 @@ async function defaultVerify(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(VERIFY_URL, {
+      redirect: "manual",
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

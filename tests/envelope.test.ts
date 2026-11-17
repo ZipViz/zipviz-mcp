@@ -25,6 +25,8 @@ import {
 } from "../src/core/envelope.js";
 import {
   canonicalReceipt,
+  isReceiptNonce,
+  isReceiptSignature,
   signReceipt,
   verifyReceipt,
 } from "../src/core/receipts.js";
@@ -313,6 +315,59 @@ describe("verifyEnvelopeV2 negatives", () => {
     ).rejects.toMatchObject({ code: "E_WRONG_RECIPIENT" });
   });
 
+  it("rejects noncanonical timestamps and nonpositive signed lifetimes", async () => {
+    await expect(
+      verifyEnvelopeV2({
+        from: FROM,
+        to: TO,
+        msg_id: MSG_ID,
+        message: MESSAGE,
+        timestamp: "2026-08-13T10:00:00Z",
+        expires_at: EXPIRES,
+        signature,
+        now: new Date(TS),
+        cache,
+      })
+    ).rejects.toMatchObject({ code: "E_STALE" });
+
+    await expect(
+      verifyEnvelopeV2({
+        from: FROM,
+        to: TO,
+        msg_id: MSG_ID,
+        message: MESSAGE,
+        timestamp: TS,
+        expires_at: TS,
+        signature,
+        now: new Date("2026-08-13T09:59:00.000Z"),
+        cache,
+      })
+    ).rejects.toMatchObject({ code: "E_EXPIRED" });
+  });
+
+  it("rejects permissive base64 aliases of a valid Ed25519 signature", async () => {
+    for (const alias of [
+      ` ${signature}`,
+      `${signature}\n`,
+      `${signature}suffix`,
+      signature.slice(0, -2),
+    ]) {
+      await expect(
+        verifyEnvelopeV2({
+          from: FROM,
+          to: TO,
+          msg_id: MSG_ID,
+          message: MESSAGE,
+          timestamp: TS,
+          expires_at: EXPIRES,
+          signature: alias,
+          now: new Date(TS),
+          cache,
+        })
+      ).rejects.toMatchObject({ code: "E_SIG_INVALID" });
+    }
+  });
+
   it("fails when the envelope is expired (now >= expires_at)", async () => {
     // Stay inside the ±5 min freshness window so E_EXPIRED is the specific code.
     const shortExpiry = "2026-08-13T10:01:00.000Z";
@@ -439,6 +494,20 @@ describe("hex → SPKI conversion", () => {
 });
 
 describe("RegistryPubkeyCache TTL + negative cache", () => {
+  it("refuses automatic redirects on the fixed registry origin", async () => {
+    const fetchFn = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(init?.redirect).toBe("manual");
+      return new Response(
+        JSON.stringify({ public_key: "ab".repeat(32), name: FROM }),
+        { status: 200 }
+      );
+    });
+    const cache = new RegistryPubkeyCache({ fetchFn });
+
+    await expect(cache.getPubkeyHex(FROM)).resolves.toBe("ab".repeat(32));
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
   it("reuses a hit within 60s and refetches after TTL", async () => {
     let now = 1_000_000;
     let fetches = 0;
@@ -577,6 +646,10 @@ describe("receipt canonical + sign → verify", () => {
         pubkeyHex,
       })
     ).toBe(true);
+    expect(isReceiptNonce(signed.nonce)).toBe(true);
+    expect(isReceiptSignature(signed.signature)).toBe(true);
+    expect(isReceiptNonce(`${signed.nonce}0`)).toBe(false);
+    expect(isReceiptSignature(`${signed.signature}\n`)).toBe(false);
   });
 
   it("rejects a tampered receipt field", async () => {

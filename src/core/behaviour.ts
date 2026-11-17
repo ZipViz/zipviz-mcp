@@ -195,6 +195,7 @@ async function fetchBehaviour(
   let res: Response;
   try {
     res = await fetchFn(`${base}/v1/blue-tick/${encodeURIComponent(domain)}`, {
+      redirect: "manual",
       signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
     });
   } catch (err) {

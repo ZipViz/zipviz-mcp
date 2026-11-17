@@ -62,6 +62,7 @@ describe("zipviz_verify posts what it was asked to verify", () => {
       "https://api.zipviz.ai/v1/verify",
       expect.objectContaining({
         method: "POST",
+        redirect: "manual",
         body: JSON.stringify({
           from: D,
           message: "Hello",

@@ -1,3 +1,4 @@
+import { isCanonicalIsoTimestamp } from "../lib/iso-timestamp.js";
 import { isValidVizDomain } from "../lib/viz-domain.js";
 
 export type DoorbellDriverName =
@@ -206,6 +207,24 @@ export function parseConversationWire(
   value: unknown,
   envelopeTimestamp?: string
 ): ConversationWire {
+  return parseConversationFields(value, envelopeTimestamp, false);
+}
+
+/** Only for already-verified persisted proof. Never use for new admission,
+ * signing or model output. Preserve historical signed strings verbatim.
+ */
+export function parsePersistedConversationWire(
+  value: unknown,
+  envelopeTimestamp?: string
+): ConversationWire {
+  return parseConversationFields(value, envelopeTimestamp, true);
+}
+
+function parseConversationFields(
+  value: unknown,
+  envelopeTimestamp: string | undefined,
+  historicalReplyBy: boolean
+): ConversationWire {
   if (value === undefined) {
     throw new ConversationWireError(
       "E_CONVERSATION_MISSING",
@@ -300,7 +319,12 @@ export function parseConversationWire(
 
   let replyBy: string | undefined;
   if (wire.reply_by !== undefined) {
-    if (typeof wire.reply_by !== "string" || !Number.isFinite(Date.parse(wire.reply_by))) {
+    if (
+      typeof wire.reply_by !== "string" ||
+      (historicalReplyBy
+        ? !Number.isFinite(Date.parse(wire.reply_by))
+        : !isCanonicalIsoTimestamp(wire.reply_by))
+    ) {
       throw new ConversationWireError(
         "E_CONVERSATION_FIELD",
         "conversation.reply_by must be a valid ISO-8601 timestamp"

@@ -70,8 +70,8 @@ type A2APart = { kind: string; text?: string };
 // ZipvizSenderMetadata the Worker attaches to outbound envelopes. All fields
 // are `unknown` because this arrives from a remote, possibly-adversarial
 // recipient — reply-attestation.ts validates the shape before trusting any of
-// it. `v`/`signing_version` are optional; today the only canonical envelope is
-// v=1 (the one api.zipviz.ai /v1/verify reconstructs).
+// it. Legacy local verification can inspect V1 metadata; network send
+// receipts require explicit V2 and a binding to the originating send.
 export interface ZipvizReplyMetadata {
   from?: unknown;
   timestamp?: unknown;

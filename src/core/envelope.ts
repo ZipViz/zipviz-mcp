@@ -1,4 +1,6 @@
 import { createPublicKey, verify, type KeyObject } from "node:crypto";
+import { isCanonicalEd25519Signature } from "../lib/ed25519-signature.js";
+import { isCanonicalIsoTimestamp } from "../lib/iso-timestamp.js";
 import { isValidVizDomain } from "../lib/viz-domain.js";
 import { readJsonBounded } from "../lib/bounded-json.js";
 import {
@@ -109,7 +111,7 @@ export function canonicalEnvelopeV3(fields: EnvelopeV3Fields): string {
 
 export function defaultExpiresAt(timestamp: string): string {
   const t = Date.parse(timestamp);
-  if (!Number.isFinite(t)) {
+  if (!isCanonicalIsoTimestamp(timestamp)) {
     throw new EnvelopeVerifyError("E_TIMESTAMP_FORMAT", "timestamp is not valid ISO-8601");
   }
   return new Date(t + DEFAULT_ENVELOPE_TTL_MS).toISOString();
@@ -118,7 +120,7 @@ export function defaultExpiresAt(timestamp: string): string {
 export function assertEnvelopeExpiry(timestamp: string, expiresAt: string): void {
   const t = Date.parse(timestamp);
   const exp = Date.parse(expiresAt);
-  if (!Number.isFinite(t) || !Number.isFinite(exp)) {
+  if (!isCanonicalIsoTimestamp(timestamp) || !isCanonicalIsoTimestamp(expiresAt)) {
     throw new EnvelopeVerifyError("E_TIMESTAMP_FORMAT", "timestamp/expires_at is not valid ISO-8601");
   }
   if (exp > t + MAX_ENVELOPE_TTL_MS) {
@@ -273,7 +275,10 @@ export class RegistryPubkeyCache {
     let body: unknown;
     try {
       try {
-        res = await Promise.race([this.fetchFn(url, { signal: ac.signal }), aborted]);
+        res = await Promise.race([
+          this.fetchFn(url, { signal: ac.signal, redirect: "manual" }),
+          aborted,
+        ]);
       } catch (err) {
         if (err instanceof EnvelopeVerifyError) throw err;
         throw new EnvelopeVerifyError("E_REGISTRY_UNAVAILABLE", `registry unreachable for ${from}`);
@@ -355,11 +360,14 @@ export async function verifyEnvelopeV2(params: {
   const nowMs = (params.now ?? new Date()).getTime();
   const ts = Date.parse(params.timestamp);
   const exp = Date.parse(params.expires_at);
-  if (!Number.isFinite(ts) || !Number.isFinite(exp)) {
+  if (!isCanonicalIsoTimestamp(params.timestamp) || !isCanonicalIsoTimestamp(params.expires_at)) {
     throw new EnvelopeVerifyError("E_STALE", "timestamp/expires_at is not valid ISO-8601");
   }
   if (nowMs >= exp) {
     throw new EnvelopeVerifyError("E_EXPIRED", "envelope has expired");
+  }
+  if (exp <= ts) {
+    throw new EnvelopeVerifyError("E_EXPIRED", "expires_at must be after timestamp");
   }
   if (exp > ts + MAX_ENVELOPE_TTL_MS) {
     throw new EnvelopeVerifyError("E_EXPIRED", "expires_at exceeds timestamp + 24h");
@@ -376,17 +384,15 @@ export async function verifyEnvelopeV2(params: {
     throw new EnvelopeVerifyError("E_STALE", "envelope timestamp is in the future beyond +5 min skew");
   }
 
+  if (!isCanonicalEd25519Signature(params.signature)) {
+    throw new EnvelopeVerifyError(
+      "E_SIG_INVALID",
+      "signature must be canonical base64 for 64 bytes"
+    );
+  }
   const pubkeyHex = await params.cache.getPubkeyHex(params.from);
   const pubkey = ed25519HexToPublicKey(pubkeyHex);
-  let sigBytes: Buffer;
-  try {
-    sigBytes = Buffer.from(params.signature, "base64");
-  } catch {
-    throw new EnvelopeVerifyError("E_SIG_INVALID", "signature is not valid base64");
-  }
-  if (sigBytes.length !== 64) {
-    throw new EnvelopeVerifyError("E_SIG_INVALID", "signature is not 64 bytes");
-  }
+  const sigBytes = Buffer.from(params.signature, "base64");
   const canonical = Buffer.from(
     canonicalEnvelopeV2({
       from: params.from,
@@ -446,11 +452,14 @@ export async function verifyEnvelopeV3(params: {
   const nowMs = (params.now ?? new Date()).getTime();
   const ts = Date.parse(params.timestamp);
   const exp = Date.parse(params.expires_at);
-  if (!Number.isFinite(ts) || !Number.isFinite(exp)) {
+  if (!isCanonicalIsoTimestamp(params.timestamp) || !isCanonicalIsoTimestamp(params.expires_at)) {
     throw new EnvelopeVerifyError("E_STALE", "timestamp/expires_at is not valid ISO-8601");
   }
   if (nowMs >= exp) {
     throw new EnvelopeVerifyError("E_EXPIRED", "envelope has expired");
+  }
+  if (exp <= ts) {
+    throw new EnvelopeVerifyError("E_EXPIRED", "expires_at must be after timestamp");
   }
   if (exp > ts + MAX_ENVELOPE_TTL_MS) {
     throw new EnvelopeVerifyError("E_EXPIRED", "expires_at exceeds timestamp + 24h");
@@ -459,12 +468,15 @@ export async function verifyEnvelopeV3(params: {
     throw new EnvelopeVerifyError("E_STALE", "envelope timestamp is in the future beyond +5 min skew");
   }
 
+  if (!isCanonicalEd25519Signature(params.signature)) {
+    throw new EnvelopeVerifyError(
+      "E_SIG_INVALID",
+      "signature must be canonical base64 for 64 bytes"
+    );
+  }
   const pubkeyHex = await params.cache.getPubkeyHex(params.from);
   const pubkey = ed25519HexToPublicKey(pubkeyHex);
   const sigBytes = Buffer.from(params.signature, "base64");
-  if (sigBytes.length !== 64) {
-    throw new EnvelopeVerifyError("E_SIG_INVALID", "signature is not 64 bytes");
-  }
   const canonical = Buffer.from(
     canonicalEnvelopeV3({
       from: params.from,

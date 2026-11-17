@@ -922,10 +922,12 @@ describe("BehaviourLookup — an outage is audible", () => {
 describe("BehaviourLookup — it asks the public endpoint", () => {
   it("uses the same URL any third party would", async () => {
     let seen = "";
+    let requestInit: RequestInit | undefined;
     const lookup = new BehaviourLookup({
       apiBase: "https://api.example.test/",
-      fetchFn: async (url) => {
+      fetchFn: async (url, init) => {
         seen = String(url);
+        requestInit = init;
         return ok(TICKED);
       },
     });
@@ -933,6 +935,7 @@ describe("BehaviourLookup — it asks the public endpoint", () => {
     await lookup.get("gary.yc.viz");
 
     expect(seen).toBe("https://api.example.test/v1/blue-tick/gary.yc.viz");
+    expect(requestInit?.redirect).toBe("manual");
   });
 });
 

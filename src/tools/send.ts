@@ -5,7 +5,7 @@ import { zipvizFetch } from "../lib/api.js";
 import type { AgentCard, A2AResponse } from "../lib/types.js";
 import { isValidVizDomain } from "../lib/viz-domain.js";
 import { safeEgressFetch, EgressBlockedError } from "../lib/egress.js";
-import { signMessage, signEnvelopeV2 } from "./sign_message.js";
+import { signEnvelopeV2 } from "./sign_message.js";
 import { attestReply, type ReplyAttestation, VERIFY_TIMEOUT_MS } from "../lib/reply-attestation.js";
 import { wrapUntrusted } from "../lib/untrusted.js";
 import { boundModelText } from "../lib/model-text.js";
@@ -36,10 +36,10 @@ export interface ZipvizSenderMetadata {
   from: string;
   timestamp: string;
   signature: string;
-  v?: 1 | 2;
-  to?: string;
-  msg_id?: string;
-  expires_at?: string;
+  v: 2;
+  to: string;
+  msg_id: string;
+  expires_at: string;
   reply_to?: string;
 }
 
@@ -67,7 +67,7 @@ export function registerSend(server: McpServer) {
         "Send a message to an agent on the ZipViz network. Looks up the recipient's tunnel URL and POSTs an A2A message. " +
         "The message is ALWAYS Ed25519-signed locally as the identity given in `as` (required), using that identity's " +
         "private key (default location ~/.zipviz/keys/<as>.key); the signature is attached as " +
-        "params.message.metadata.zipviz so the recipient's relay can verify the sender via api.zipviz.ai/v1/verify. " +
+        "params.message.metadata.zipviz as a recipient-bound V2 envelope. " +
         "There is no unsigned send path — recipients running strict signed-inbound reject unsigned messages.",
       inputSchema: {
         domain: z
@@ -88,10 +88,10 @@ export function registerSend(server: McpServer) {
               "Every send must be signed; there is no unsigned path."
           ),
         envelope_v: z
-          .union([z.literal(1), z.literal(2)])
+          .literal(2)
           .optional()
           .describe(
-            "Envelope version. Default 1 (unchanged v1 canonical). 2 adds recipient binding, msg_id, and expiry."
+            "Envelope version. Defaults to 2, binding the recipient, msg_id and expiry. Legacy V1 network sends are rejected."
           ),
       },
     },
@@ -135,6 +135,22 @@ export function registerSend(server: McpServer) {
         };
       }
 
+      // Direct callers can bypass the schema. Reject legacy or unknown formats
+      // before lookup or signing; there is no downgrade for old receivers.
+      if (envelope_v !== undefined && envelope_v !== 2) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                "Only recipient-bound envelope_v: 2 is supported for network sends. " +
+                "No lookup, signing or send happened.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
       // Step 1: Look up the agent to get tunnel URL
       const card = await zipvizFetch<AgentCard>(
         `/v1/agent/${encodeURIComponent(domain)}/card`
@@ -152,55 +168,28 @@ export function registerSend(server: McpServer) {
         };
       }
 
-      // Step 2: Optionally sign as a local identity. When `as` is set we
-      // call signMessage with the default key location (~/.zipviz/keys/<as>.key).
-      // No key_path override here on purpose — the relay-side guard for
-      // zipviz_sign_message rejects key_path, and zipviz_send must not
-      // become a back-door past that. The recipient verifies via
-      // api.zipviz.ai/v1/verify against the public key registered for `as`.
-      //
-      // Read `timestamp` back from the signMessage return value —
-      // it is the exact value baked into the signed v=1 canonical payload.
-      // Pre-fix this block generated a fresh `new Date().toISOString()`
-      // AFTER signing, and the resulting envelope's timestamp diverged
-      // from the timestamp the signature actually covered. /v1/verify
-      // reconstructs the payload from envelope fields, so a divergent
-      // timestamp guarantees E_SIG_MISMATCH.
-      // `as` is guaranteed a valid .viz domain by the Step-0 guard, so we ALWAYS
-      // sign — there is no unsigned send path. A missing or unusable
-      // key (~/.zipviz/keys/<as>.key) fails closed here, before any send.
-      const useV2 = envelope_v === 2;
+      // Step 2: Sign the shared V2 canonical envelope. Read back the exact
+      // timestamp, expiry and message id covered by the signature. Network
+      // sends never use the local V1 primitive.
       let senderMeta: ZipvizSenderMetadata;
       let messageId = `msg-${randomUUID()}`;
       try {
-        if (useV2) {
-          const signed = await signEnvelopeV2({
-            viz_domain: as,
-            to: domain,
-            message,
-            msg_id: messageId,
-          });
-          senderMeta = {
-            v: 2,
-            from: as,
-            to: domain,
-            msg_id: signed.msg_id,
-            timestamp: signed.timestamp,
-            expires_at: signed.expires_at,
-            signature: signed.signature,
-          };
-          messageId = signed.msg_id;
-        } else {
-          const signed = await signMessage({
-            viz_domain: as,
-            message,
-          });
-          senderMeta = {
-            from: as,
-            timestamp: signed.timestamp,
-            signature: signed.signature,
-          };
-        }
+        const signed = await signEnvelopeV2({
+          viz_domain: as,
+          to: domain,
+          message,
+          msg_id: messageId,
+        });
+        senderMeta = {
+          v: 2,
+          from: as,
+          to: domain,
+          msg_id: signed.msg_id,
+          timestamp: signed.timestamp,
+          expires_at: signed.expires_at,
+          signature: signed.signature,
+        };
+        messageId = signed.msg_id;
       } catch (err) {
         return {
           content: [
@@ -389,37 +378,21 @@ export function registerSend(server: McpServer) {
         .map((p) => p.text)
         .join("\n");
 
-      // Preserve + verify the recipient's signed reply, if it attached
-      // one. A signed reply proves provenance/integrity of the reply text; a
-      // v2 receipt proves only that the recipient accepted this message and
-      // leaves the text unverified. Neither makes the text safe to act on, so `response` stays wrapped as
-      // untrusted below regardless of the attestation. attestReply fails closed
-      // and never throws, so a verification hiccup can't abort a send that
-      // otherwise succeeded. We verify the RAW `responseText` (what the
-      // recipient signed), not the untrusted-wrapped form.
+      // A receipt proves only that the recipient accepted this message; it
+      // does not verify the reply text. Accept only a locally verified V2
+      // receipt bound to this send. The response remains untrusted model text.
       const replyAttestation: ReplyAttestation = await attestReply({
         recipientDomain: domain,
         replyText: responseText,
         response,
-        ...(useV2
-          ? {
-              // Bind the receipt to THIS send: it must name the msg_id we just
-              // minted and the identity we sent as, or a recipient replaying an
-              // old receipt would get an ACCEPTED receipt for a message it
-              // never accepted. The receipt never verifies the reply text.
-              verifyFn: localV2ReceiptVerifyFn(
-                card.public_key,
-                response,
-                { msg_id: messageId, to: as },
-                VERIFY_TIMEOUT_MS
-              ),
-              // A v2 receipt verifies fully offline after the required card
-              // lookup. Avoid adding a second registry dependency, latency and
-              // rate-limit cost merely to enrich that proof with a tick;
-              // callers receive `unknown` instead.
-              behaviourFetchFn: null,
-            }
-          : {}),
+        verifyFn: localV2ReceiptVerifyFn(
+          card.public_key,
+          response,
+          { msg_id: messageId, to: as },
+          VERIFY_TIMEOUT_MS
+        ),
+        // The receipt verifies fully offline after the required card lookup.
+        behaviourFetchFn: null,
       });
 
       const result: {
