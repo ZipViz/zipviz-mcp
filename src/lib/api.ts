@@ -19,6 +19,9 @@ export async function zipvizFetch<T>(
   const { timeoutMs, ...init } = options ?? {};
   const res = await fetch(url, {
     ...init,
+    // The fixed API origin does not authorize a redirect destination. Keep
+    // this after init so an individual caller cannot restore auto-follow.
+    redirect: "manual",
     headers: {
       "Content-Type": "application/json",
       ...options?.headers,

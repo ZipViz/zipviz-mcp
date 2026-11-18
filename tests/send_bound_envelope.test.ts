@@ -1,17 +1,3 @@
-// End-to-end coverage for the signed-send path.
-//
-// `tests/send.test.ts` mocks signMessage to assert envelope SHAPE only —
-// that test never actually computes a real Ed25519 signature, so it
-// can't catch a format mismatch between the bytes the helper signs and
-// the bytes the trust root reconstructs to verify.
-//
-// This file uses the REAL signMessage with a real ephemeral keypair
-// and a temp HOME directory, calls zipviz_send with `as:` set, captures
-// the outgoing A2A envelope, and asserts the signature in
-// metadata.zipviz re-verifies locally against the v=1 canonical
-// payload — i.e. the exact bytes the registry
-// reconstructs at /v1/verify.
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetSharedBehaviourLookup } from "../src/core/behaviour.js";
 import { generateKeyPairSync, KeyObject, verify } from "node:crypto";
@@ -20,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { canonicalEnvelopeV2 } from "../src/core/envelope.js";
+import { signMessage } from "../src/tools/sign_message.js";
 import { registerSend } from "../src/tools/send.js";
 
 // Keep this end-to-end signing test hermetic: stub the SSRF egress guard so it
@@ -50,12 +38,12 @@ vi.mock("../src/lib/egress.js", () => {
   };
 });
 
-const TEST_VIZ_DOMAIN = "elu40-v1.smc.viz";
+const TEST_VIZ_DOMAIN = "sender.synthetic.viz";
 
 const mockCard = {
-  name: "ticki.adkgo.viz",
-  description: "ExampleAgent verified identity",
-  url: "https://d5ababffe892.agents.zipviz.ai",
+  name: "recipient.synthetic.viz",
+  description: "Example verified identity",
+  url: "https://recipient.invalid",
   capabilities: [],
   authentication: { schemes: ["ed25519"] },
   public_key:
@@ -69,14 +57,14 @@ const mockA2AResponse = {
   id: 1,
   result: {
     message: {
-      messageId: "resp-elu40",
+      messageId: "response-1",
       role: "agent",
       parts: [{ kind: "text", text: "ack" }],
     },
   },
 };
 
-describe("zipviz_send v=1 signed envelope (real keypair, no mock)", () => {
+describe("zipviz_send bound network envelope (real keypair)", () => {
   let tmpHome: string;
   let prevHome: string | undefined;
   let senderPublicKey: KeyObject;
@@ -84,6 +72,7 @@ describe("zipviz_send v=1 signed envelope (real keypair, no mock)", () => {
     domain: string;
     message: string;
     as?: string;
+    envelope_v?: number;
   }) => Promise<any>;
   let fetchStub: ReturnType<typeof vi.fn>;
 
@@ -92,9 +81,9 @@ describe("zipviz_send v=1 signed envelope (real keypair, no mock)", () => {
     // calls coalesce. Reset it between cases: without this, one test's scripted
     // outage is remembered and the next test's request never happens.
     resetSharedBehaviourLookup();
-    // 1. Temp HOME so signMessage's default key-path resolver lands in
+    // 1. Temp HOME so the signing helper's default key-path resolver lands in
     //    a per-test directory instead of the real ~/.zipviz/keys.
-    tmpHome = await mkdtemp(join(tmpdir(), "zipviz-elu40-"));
+    tmpHome = await mkdtemp(join(tmpdir(), "zipviz-bound-send-"));
     await mkdir(join(tmpHome, ".zipviz", "keys"), { recursive: true });
     prevHome = process.env.HOME;
     process.env.HOME = tmpHome;
@@ -111,9 +100,7 @@ describe("zipviz_send v=1 signed envelope (real keypair, no mock)", () => {
     );
 
     // 3. fetch stub: first call returns the agent card, second returns
-    //    the A2A response. The card's public_key field is irrelevant
-    //    to send.ts (it doesn't verify recipient identity there) — only
-    //    the `url` is used.
+    //    the A2A response. Receipt verification also consumes the card key.
     let n = 0;
     fetchStub = vi.fn(() => {
       n += 1;
@@ -155,11 +142,11 @@ describe("zipviz_send v=1 signed envelope (real keypair, no mock)", () => {
     await rm(tmpHome, { recursive: true, force: true });
   });
 
-  it("signs the outgoing message so the wire envelope re-verifies against the v=1 canonical payload", async () => {
-    const message = "end-to-end smoke";
+  it("defaults omitted envelope_v to recipient-bound canonical V2", async () => {
+    const message = "synthetic bound send";
 
     const result = await handler({
-      domain: "ticki.adkgo.viz",
+      domain: "recipient.synthetic.viz",
       message,
       as: TEST_VIZ_DOMAIN,
     });
@@ -173,29 +160,17 @@ describe("zipviz_send v=1 signed envelope (real keypair, no mock)", () => {
     expect(typeof meta.timestamp).toBe("string");
     expect(typeof meta.signature).toBe("string");
 
-    // THE assertion: reconstruct the exact v=1 canonical payload that
-    // the registry would build from {from, message,
-    // timestamp} extracted from this envelope, and confirm the
-    // signature in the envelope verifies against it under the sender's
-    // public key. If this fails, /v1/verify will return
-    // verified:false, code:E_SIG_MISMATCH on the live trust root.
-    const expectedPayload = Buffer.from(
-      JSON.stringify({
-        v: 1,
-        from: meta.from,
-        message,
-        timestamp: meta.timestamp,
-      }),
-      "utf8"
-    );
+    expect(meta.v).toBe(2);
+    expect(meta.to).toBe("recipient.synthetic.viz");
+    expect(meta.msg_id).toBe(a2aBody.params.message.messageId);
+    const expectedPayload = Buffer.from(canonicalEnvelopeV2({ ...meta, message }));
     const sigBytes = Buffer.from(meta.signature, "base64");
     expect(verify(null, expectedPayload, senderPublicKey, sigBytes)).toBe(
       true
     );
 
-    // Regression guard: the older wire format (signature over bare
-    // message bytes, plus a fresh post-sign timestamp on the envelope)
-    // must NOT verify. If this passes again we've slipped back.
+    // Regression guard: the legacy bare-message signature must not verify as
+    // a recipient-bound envelope.
     expect(
       verify(
         null,
@@ -206,49 +181,63 @@ describe("zipviz_send v=1 signed envelope (real keypair, no mock)", () => {
     ).toBe(false);
   });
 
-  it("preserves the exact timestamp signMessage used — envelope.timestamp drives the verify payload", async () => {
-    // Sanity: send.ts must NOT regenerate a fresh timestamp after the
-    // sign call. The wire timestamp must equal the timestamp baked
-    // into the signed v=1 payload. (Covered transitively by the test
-    // above — if the envelope timestamp diverged, the verify would
-    // fail. This case asserts the relationship directly so a future
-    // regression has an obvious pinpoint failure.)
-    const message = "timestamp-pinning check";
-
-    await handler({
-      domain: "ticki.adkgo.viz",
-      message,
-      as: TEST_VIZ_DOMAIN,
-    });
-
-    const a2aBody = JSON.parse(fetchStub.mock.calls[1][1].body);
-    const wireTimestamp = a2aBody.params.message.metadata.zipviz.timestamp;
-    const sigBytes = Buffer.from(
-      a2aBody.params.message.metadata.zipviz.signature,
-      "base64"
-    );
-
-    // The wire timestamp is the ONLY timestamp the signature can be
-    // verifying against — there is no other. Re-verify to confirm.
-    const payloadWithWireTs = Buffer.from(
-      JSON.stringify({
-        v: 1,
-        from: TEST_VIZ_DOMAIN,
-        message,
-        timestamp: wireTimestamp,
-      }),
-      "utf8"
-    );
-    expect(
-      verify(null, payloadWithWireTs, senderPublicKey, sigBytes)
-    ).toBe(true);
+  it.each([
+    ["recipient", { to: "other.smc.viz" }],
+    ["message id", { msg_id: "message-retargeted" }],
+    ["expiry", { expires_at: "2026-08-13T12:00:00.000Z" }],
+    ["reply context", { reply_to: "message-another-context" }],
+  ])("rejects tampered %s with a real valid signature", async (_name, change) => {
+    const message = "synthetic recipient binding";
+    await handler({ domain: "recipient.synthetic.viz", message, as: TEST_VIZ_DOMAIN });
+    const wire = JSON.parse(fetchStub.mock.calls[1][1].body);
+    const meta = wire.params.message.metadata.zipviz;
+    const sig = Buffer.from(meta.signature, "base64");
+    // Positive control: same key/signature and original bytes are valid.
+    expect(verify(null, Buffer.from(canonicalEnvelopeV2({ ...meta, message })), senderPublicKey, sig)).toBe(true);
+    expect(verify(null, Buffer.from(canonicalEnvelopeV2({ ...meta, message, ...change })), senderPublicKey, sig)).toBe(false);
   });
 
-  it("no `as` is REJECTED — no unsigned send path, no fetch, no signing key access", async () => {
+  it("rejects a cryptographically valid V1 reply retargeted into this send", async () => {
+    const recipient = "recipient.synthetic.viz";
+    const message = "synthetic valid legacy reply";
+    const keyPath = join(tmpHome, ".zipviz", "keys", `${TEST_VIZ_DOMAIN}.key`);
+    const signed = await signMessage({ viz_domain: recipient, message, key_path: keyPath });
+    const canonical = Buffer.from(JSON.stringify({ v: 1, from: recipient, message, timestamp: signed.timestamp }));
+    expect(verify(null, canonical, senderPublicKey, Buffer.from(signed.signature, "base64"))).toBe(true);
+    const card = { ...mockCard, public_key: (senderPublicKey.export({ type: "spki", format: "der" }) as Buffer).subarray(-32).toString("hex") };
+    const response = { jsonrpc: "2.0", id: 1, result: { message: { parts: [{ kind: "text", text: message }], metadata: { zipviz: { from: recipient, timestamp: signed.timestamp, signature: signed.signature } } } } };
+    fetchStub.mockReset().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/v1/verify")) {
+        const body = JSON.parse(String(init?.body));
+        const bytes = Buffer.from(JSON.stringify({ v: 1, from: body.from, message: body.message, timestamp: body.timestamp }));
+        return new Response(JSON.stringify({
+          verified: verify(null, bytes, senderPublicKey, Buffer.from(body.signature, "base64")),
+          identity: recipient, signing_version: 1, freshness_checked: true,
+        }));
+      }
+      return new Response(JSON.stringify({ identity: recipient, blue_tick: null, reputation: null }));
+    }).mockResolvedValueOnce(new Response(JSON.stringify(card))).mockResolvedValueOnce(new Response(JSON.stringify(response)));
+    const result = await handler({ domain: recipient, message: "another context", as: TEST_VIZ_DOMAIN });
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.reply_attestation.reply_verified).toBe(false);
+    expect(parsed.reply_attestation.reply_signing_version).toBeNull();
+    expect(parsed.response).toContain(message);
+    expect(parsed.response_is_untrusted).toBe(true);
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([1, 3, null, "2"])("rejects unsupported network version %s before I/O", async (envelope_v) => {
+    const result = await handler({ domain: "recipient.synthetic.viz", message: "synthetic", as: TEST_VIZ_DOMAIN, envelope_v } as any);
+    expect(result.isError).toBe(true);
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing sender before lookup, signing, or delivery", async () => {
     // The unsigned path no longer exists: a call without `as` fails closed at
     // the tool boundary BEFORE any network or key access.
     const result = await handler({
-      domain: "ticki.adkgo.viz",
+      domain: "recipient.synthetic.viz",
       message: "anonymous",
     });
 

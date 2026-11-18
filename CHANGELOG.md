@@ -2,6 +2,23 @@
 
 All notable changes to this project are listed here.
 
+## 2.0.0
+
+### Breaking
+
+- `zipviz_send` now always uses recipient-bound V2 envelopes for network sends and rejects legacy
+  or unknown network envelope versions before any lookup, signing, or delivery. V1 envelopes are
+  no longer accepted for network delivery, so V1-only receivers must upgrade.
+
+### Changed
+
+- Reply acceptance now requires a locally verified V2 receipt bound to the original send. A
+  transferable V1 signature no longer authenticates a network reply.
+- Fixed-origin registry, verification, and behavior lookups now refuse redirects.
+- Protocol admission now requires canonical ISO timestamps, canonical Ed25519 signature encoding,
+  valid receipt nonces, and positive signed-envelope lifetimes.
+- The final egress-policy hook may complete asynchronously before a connection begins.
+
 ## 1.1.1
 
 ### Changed

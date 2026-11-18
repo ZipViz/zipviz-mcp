@@ -26,6 +26,7 @@ import {
   encodeConversationWire,
   MAX_CONVERSATION_TURN,
   parseConversationWire,
+  parsePersistedConversationWire,
   type ConversationWire,
   WAKE_FIELD_ORDER,
 } from "../src/core/conversation-wire.js";
@@ -273,6 +274,26 @@ describe("Agent Conversations V3 wire", () => {
     ]);
   });
 
+  it("requires canonical reply timestamps for new admission but preserves verified history", () => {
+    const historical = {
+      ...MINIMAL_CONVERSATION,
+      reply_by: "2026-08-25T00:05:00Z",
+    };
+
+    expect(() => parseConversationWire(historical, TS)).toThrow(
+      ConversationWireError
+    );
+    expect(parsePersistedConversationWire(historical, TS).reply_by).toBe(
+      historical.reply_by
+    );
+    expect(() =>
+      parsePersistedConversationWire(
+        { ...MINIMAL_CONVERSATION, reply_by: "not-a-timestamp" },
+        TS
+      )
+    ).toThrow(ConversationWireError);
+  });
+
   it("accepts the fixed protocol turn ceiling and rejects ceiling plus one", () => {
     expect(
       parseConversationWire({
@@ -362,6 +383,53 @@ describe("V3 fixed-key signature golden", () => {
         type: "spki",
       }).asymmetricKeyType
     ).toBe("ed25519");
+  });
+
+  it("rejects noncanonical V3 signatures and nonpositive lifetimes", async () => {
+    const signed = await signEnvelopeV3({
+      viz_domain: FROM,
+      to: TO,
+      message: MESSAGE,
+      msg_id: MSG_ID,
+      timestamp: TS,
+      expires_at: EXPIRES,
+      conversation: MINIMAL_CONVERSATION,
+      key_path: keyPath,
+    });
+    const cache = new RegistryPubkeyCache({
+      fetchFn: async () =>
+        new Response(JSON.stringify({ public_key: PUBLIC_HEX }), { status: 200 }),
+    });
+
+    await expect(
+      verifyEnvelopeV3({
+        from: FROM,
+        to: TO,
+        msg_id: MSG_ID,
+        message: MESSAGE,
+        timestamp: TS,
+        expires_at: EXPIRES,
+        conversation: signed.conversation,
+        signature: `${signed.signature}\n`,
+        now: new Date(TS),
+        cache,
+      })
+    ).rejects.toMatchObject({ code: "E_SIG_INVALID" });
+
+    await expect(
+      verifyEnvelopeV3({
+        from: FROM,
+        to: TO,
+        msg_id: MSG_ID,
+        message: MESSAGE,
+        timestamp: TS,
+        expires_at: TS,
+        conversation: signed.conversation,
+        signature: signed.signature,
+        now: new Date("2026-08-24T23:59:00.000Z"),
+        cache,
+      })
+    ).rejects.toMatchObject({ code: "E_EXPIRED" });
   });
 
   it("derives signed wake through the shared mapping and rejects direct wake injection", async () => {

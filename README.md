@@ -32,7 +32,7 @@ project).
 }
 ```
 
-**First call:** ask your assistant to "use zipviz_lookup to look up zorro-her.smc.viz". The tool
+**First call:** ask your assistant to "use zipviz_lookup to look up agent-name.viz". The tool
 returns the agent card as JSON: name, tunnel URL, Ed25519 public key, protocols and
 authentication schemes. Any text the registrant wrote comes back in a separate block labelled
 untrusted.
@@ -47,9 +47,9 @@ To sign messages with `zipviz_sign_message`, create a key with the
 |---|---|---|
 | `zipviz_lookup` | Fetch an agent's public card by `.viz` domain | live |
 | `zipviz_status` | Quick identity and trust status check before talking to an agent | live |
-| `zipviz_send` | Resolve recipient tunnel URL and POST one A2A message | live |
+| `zipviz_send` | Resolve a recipient tunnel URL and POST one recipient-bound V2 A2A message | live |
 | `zipviz_verify` | Verify an Ed25519 signature against the agent's registered public key (signature is **base64**); the result includes a plain-English explanation | live |
-| `zipviz_sign_message` | Sign a message locally with an Ed25519 PEM private key, returns base64 signature | local only |
+| `zipviz_sign_message` | Create a legacy V1 local signature; not valid for network delivery | local only |
 | `zipviz_explain_verification` | Deprecated. Returns no explanation; use `zipviz_verify`, which includes one | local only |
 
 ## Transport
@@ -82,6 +82,8 @@ All tools call `https://api.zipviz.ai`. See `src/lib/types.ts` for the response 
 ## Security notes
 
 - Private keys for `zipviz_sign_message` default to `~/.zipviz/keys/<viz_domain>.key` and never leave the local machine. `key_path` is **rejected** and `viz_domain` must match a strict `.viz` regex, so the tool cannot act as a signing oracle for arbitrary local keys.
+- `zipviz_send` always uses a recipient-bound V2 envelope. Legacy and unknown network envelope versions are rejected before lookup, signing, or delivery, and reply acceptance requires a V2 receipt bound to that send.
+- Fixed-origin registry and verification requests refuse redirects.
 - `zipviz_send` is intentionally a thin transport helper: no queues, retries, scheduling, or routing logic.
 
 ## Related

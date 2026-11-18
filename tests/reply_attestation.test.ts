@@ -554,6 +554,30 @@ describe("attestReply — default verify transport (findings 2 & 3)", () => {
     };
   }
 
+  it("refuses automatic redirects on the fixed verification origin", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(init?.redirect).toBe("manual");
+      return fakeResponse({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          verified: false,
+          error: "timestamp outside the freshness window",
+          code: "E_STALE",
+        }),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await attestReply({
+      recipientDomain: RECIPIENT,
+      replyText: REPLY_TEXT,
+      response,
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("preserves a non-2xx E_STALE verdict as its code, NOT verify_unavailable", async () => {
     vi.stubGlobal(
       "fetch",

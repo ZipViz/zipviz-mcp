@@ -534,8 +534,8 @@ export async function safeEgressFetch(
     fetchFn?: EgressFetchFn;
     lookupFn?: LookupFn;
     assertEgress?: (url: string) => Promise<ValidatedTarget>;
-    /** Synchronous final policy hook, called after URL validation before every fetch. */
-    beforeFetch?: (url: string) => void;
+    /** Final policy hook, awaited after URL validation before every fetch. */
+    beforeFetch?: (url: string) => void | Promise<void>;
     maxRedirects?: number;
     bodyPolicy: EgressBodyPolicy;
   }
@@ -558,7 +558,7 @@ export async function safeEgressFetch(
 
   for (let redirects = 0; ; redirects += 1) {
     const target = await untilAborted(assertEgress(currentUrl), currentInit.signal);
-    opts.beforeFetch?.(currentUrl);
+    await opts.beforeFetch?.(currentUrl);
     const response = await fetchFn(currentUrl, currentInit, target);
     if (!REDIRECT_STATUSES.has(response.status)) {
       if (opts.bodyPolicy.mode === "cancel") {

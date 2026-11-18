@@ -3,14 +3,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const MOCK_TIMESTAMP = "2026-08-26T04:00:00.000Z";
 
 vi.mock("../src/tools/sign_message.js", () => ({
-  signMessage: vi.fn(async (input: { viz_domain: string }) => ({
+  signEnvelopeV2: vi.fn(async (input: {
+    viz_domain: string;
+    to: string;
+    msg_id: string;
+  }) => ({
     viz_domain: input.viz_domain,
+    to: input.to,
+    msg_id: input.msg_id,
+    expires_at: "2026-08-26T04:10:00.000Z",
     key_path: `/mock/path/${input.viz_domain}.key`,
     signature: "QUFBQUFBQUFBQUFBQUFBQUFBQUE=",
     timestamp: MOCK_TIMESTAMP,
-    signing_version: 1 as const,
+    signing_version: 2 as const,
   })),
-  signEnvelopeV2: vi.fn(),
 }));
 
 // Real validation, redirect and body logic; only the transport is swapped for

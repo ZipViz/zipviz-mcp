@@ -1,24 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { resetSharedBehaviourLookup } from "../src/core/behaviour.js";
 
-// Mock signMessage so the `as` path doesn't depend on a real PEM file on
-// disk in CI. The mock returns a deterministic base64 signature so the
-// test asserts shape, not crypto.
-// The mock must mirror the real signMessage return shape —
-// including `timestamp` (the value the helper baked into the signed
-// v=1 payload) and `signing_version: 1` — because send.ts reads
-// `signed.timestamp` back to populate `metadata.zipviz.timestamp`. The
-// real-keypair end-to-end test in commit 3 of this PR verifies that
-// the signed envelope re-verifies locally; this mock-based test
-// continues to assert envelope shape only.
+// Envelope-shape tests use a deterministic V2 signer. Real signatures are
+// covered by the bound-envelope and receipt suites.
 const MOCK_TIMESTAMP = "2026-05-14T01:00:00.000Z";
 vi.mock("../src/tools/sign_message.js", () => ({
-  signMessage: vi.fn(async (input: { viz_domain: string; message: string }) => ({
+  signEnvelopeV2: vi.fn(async (input: {
+    viz_domain: string;
+    to: string;
+    msg_id: string;
+  }) => ({
     viz_domain: input.viz_domain,
+    to: input.to,
+    msg_id: input.msg_id,
+    expires_at: "2026-05-14T01:10:00.000Z",
     key_path: `/mock/path/${input.viz_domain}.key`,
     signature: "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=",
     timestamp: MOCK_TIMESTAMP,
-    signing_version: 1 as const,
+    signing_version: 2 as const,
   })),
 }));
 
@@ -113,6 +112,7 @@ describe("zipviz_send", () => {
     domain: string;
     message: string;
     as?: string;
+    envelope_v?: number;
   }) => Promise<any>;
   let sendConfig: any;
 
@@ -488,8 +488,8 @@ describe("zipviz_send", () => {
     // Defense in depth beyond the Zod schema: a direct handler caller (or any
     // path bypassing the SDK schema) that omits `as` must error with NO lookup,
     // NO signing, NO send. There is no unsigned send path.
-    const { signMessage } = await import("../src/tools/sign_message.js");
-    (signMessage as any).mockClear?.();
+    const { signEnvelopeV2 } = await import("../src/tools/sign_message.js");
+    (signEnvelopeV2 as any).mockClear?.();
 
     const result = await handler({
       domain: "ticki.adkgo.viz",
@@ -500,7 +500,7 @@ describe("zipviz_send", () => {
     expect(result.content[0].text).toMatch(/`as` is required|no unsigned send path/i);
     // No network at all (no lookup, no A2A) and no signing happened.
     expect((fetch as any).mock.calls.length).toBe(0);
-    expect(signMessage).not.toHaveBeenCalled();
+    expect(signEnvelopeV2).not.toHaveBeenCalled();
   });
 
   it("requires `as` at the schema level — there is no unsigned send path", () => {
@@ -517,8 +517,8 @@ describe("zipviz_send", () => {
   });
 
   it("rejects an invalid destination domain before lookup, signing, or send", async () => {
-    const { signMessage } = await import("../src/tools/sign_message.js");
-    (signMessage as any).mockClear?.();
+    const { signEnvelopeV2 } = await import("../src/tools/sign_message.js");
+    (signEnvelopeV2 as any).mockClear?.();
     for (const domain of [
       "evil.example.com",
       "evil\u001b[31m.viz",
@@ -534,7 +534,7 @@ describe("zipviz_send", () => {
       expect(result.content[0].text).toMatch(/`domain` must be a valid \.viz domain/);
     }
     expect(fetch).not.toHaveBeenCalled();
-    expect(signMessage).not.toHaveBeenCalled();
+    expect(signEnvelopeV2).not.toHaveBeenCalled();
   });
 
   it("when `as` is set, signs the message and attaches metadata.zipviz to the outbound A2A envelope", async () => {
@@ -554,12 +554,18 @@ describe("zipviz_send", () => {
       /^[A-Za-z0-9+/=]+$/
     );
     // Timestamp on the wire must equal the timestamp the mock
-    // signMessage returned (i.e. the timestamp baked into the signed
+    // signEnvelopeV2 returned (i.e. the timestamp baked into the signed
     // payload). Before the fix, send.ts generated a fresh
     // `new Date().toISOString()` AFTER signing and the envelope diverged.
     expect(a2aBody.params.message.metadata.zipviz.timestamp).toBe(
       MOCK_TIMESTAMP
     );
+    expect(a2aBody.params.message.metadata.zipviz).toMatchObject({
+      v: 2,
+      to: mockCard.name,
+      msg_id: a2aBody.params.message.messageId,
+      expires_at: "2026-05-14T01:10:00.000Z",
+    });
 
     // Tool result surfaces signed_as so the caller knows
     const parsed = JSON.parse(result.content[0].text);
@@ -570,8 +576,8 @@ describe("zipviz_send", () => {
     // Direct-tool guard — defense in depth against any caller that bypasses
     // a relay (e.g. a model API turn with zipviz_send exposed, or a caller
     // hitting the server directly). Identical regex to the relay-side guard.
-    const { signMessage } = await import("../src/tools/sign_message.js");
-    (signMessage as any).mockClear?.();
+    const { signEnvelopeV2 } = await import("../src/tools/sign_message.js");
+    (signEnvelopeV2 as any).mockClear?.();
 
     const cases = [
       "../../../etc/passwd",      // path traversal
@@ -595,15 +601,15 @@ describe("zipviz_send", () => {
       expect(result.content[0].text).toMatch(/`as` is required and must be a valid \.viz domain/);
     }
 
-    // signMessage must not have been called for any rejected case.
-    expect(signMessage).not.toHaveBeenCalled();
+    // The signer must not have been called for any rejected case.
+    expect(signEnvelopeV2).not.toHaveBeenCalled();
     // No outbound HTTP at all — neither lookup nor A2A — for invalid `as`.
     expect((fetch as any).mock.calls.length).toBe(0);
   });
 
   it("when signing fails (key missing), returns isError without sending", async () => {
-    const { signMessage } = await import("../src/tools/sign_message.js");
-    (signMessage as any).mockRejectedValueOnce(
+    const { signEnvelopeV2 } = await import("../src/tools/sign_message.js");
+    (signEnvelopeV2 as any).mockRejectedValueOnce(
       new Error(
         "Private key not found at /mock/path/missing.smc.viz.key. Generate or place an Ed25519 PEM key for missing.smc.viz at this path (or pass key_path explicitly)."
       )
@@ -621,4 +627,21 @@ describe("zipviz_send", () => {
     // No outbound A2A call should have happened (only the agent-card lookup)
     expect((fetch as any).mock.calls.length).toBeLessThanOrEqual(1);
   });
+
+  it.each([1, 3, null, "2"])(
+    "rejects unsupported network envelope version %s before I/O",
+    async (envelope_v) => {
+      const { signEnvelopeV2 } = await import("../src/tools/sign_message.js");
+      (signEnvelopeV2 as any).mockClear?.();
+      const result = await handler({
+        domain: "recipient.synthetic.viz",
+        message: "should not send",
+        as: "sender.synthetic.viz",
+        envelope_v: envelope_v as any,
+      });
+      expect(result.isError).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(signEnvelopeV2).not.toHaveBeenCalled();
+    }
+  );
 });

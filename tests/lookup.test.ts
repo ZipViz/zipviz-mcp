@@ -43,7 +43,10 @@ describe("zipviz_lookup", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "https://api.zipviz.ai/v1/agent/ticki.adkgo.viz/card",
-      expect.objectContaining({ headers: expect.any(Object) })
+      expect.objectContaining({
+        headers: expect.any(Object),
+        redirect: "manual",
+      })
     );
     expect(result.content[0].type).toBe("text");
     const parsed = JSON.parse(result.content[0].text);
