@@ -5,8 +5,11 @@ name: Release
 #
 # - Pushing a version tag (v1.2.3) creates its release.
 # - Running this workflow by hand from main with a version creates the tag and
-#   release at the tip of main. That tag is created with the workflow token, so
-#   it does not start the Publish workflow: nothing goes to npm.
+#   release at the tip of main, or at an earlier commit given as `commit`. That
+#   commit must be on main (an ancestor of its tip), its package.json must say
+#   the version, and no tag for the version may exist yet. The tag is created
+#   with the workflow token, so it does not start the Publish workflow: nothing
+#   goes to npm.
 # - A release that already exists is left alone.
 
 on:
@@ -17,6 +20,10 @@ on:
       version:
         description: "Version to release, without the v (it must match the version file)"
         required: true
+      commit:
+        description: "Optional: full SHA of an earlier commit on main to release (default: the tip of main)"
+        required: false
+        default: ""
   pull_request:
     paths:
       - ".github/scripts/release-notes*.mjs"
@@ -73,14 +80,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
+          INPUT_COMMIT: ${{ inputs.commit }}
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            version="${GITHUB_REF_NAME#v}"
+            node .github/scripts/release-notes.mjs --version "${GITHUB_REF_NAME#v}" --target "$GITHUB_SHA" \
+              --version-file "$VERSION_FILE"
           elif [ "$GITHUB_REF" = "refs/heads/main" ]; then
-            version="$INPUT_VERSION"
+            node .github/scripts/release-notes.mjs --version "$INPUT_VERSION" --target "${INPUT_COMMIT:-$GITHUB_SHA}" \
+              --version-file "$VERSION_FILE" --ancestor-of "$GITHUB_SHA" --new-tag
           else
             echo "Run this by hand from main only (got $GITHUB_REF)." >&2
             exit 1
           fi
-          node .github/scripts/release-notes.mjs --version "$version" --target "$GITHUB_SHA" \
-            --version-file "$VERSION_FILE"

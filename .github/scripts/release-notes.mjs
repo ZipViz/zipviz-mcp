@@ -4,10 +4,14 @@
 // fetch, the GitHub REST API and the local git history.
 //
 //   node .github/scripts/release-notes.mjs --version 2.0.0 --target <sha> \
-//     --version-file package.json [--dry-run]
+//     --version-file package.json [--ancestor-of <sha>] [--new-tag] [--dry-run]
 //
 // The version must match the version file at the target commit. A release that
 // already exists for the tag is left alone, so the script is safe to re-run.
+// `--ancestor-of` requires the target to be that commit or one of its
+// ancestors (a manual run passes the tip of main, so an earlier commit can be
+// released, but nothing off main). `--new-tag` requires that no tag for the
+// version exists yet (a manual run creates the tag).
 
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -86,6 +90,39 @@ function git(...args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
 
+/**
+ * Checks the commit a release goes on, before anything is created. `run` runs
+ * git (injectable so the tests can point it at a scratch repository). Throws
+ * with the reason; returns the list of local v* tags.
+ */
+export function checkTarget({ target, version, versionFile = "package.json", ancestorOf, newTag }, run = git) {
+  if (!target || !/^[0-9a-f]{40}$/.test(target)) throw new Error("--target must be a full commit SHA");
+  let type;
+  try {
+    type = run("cat-file", "-t", target);
+  } catch {
+    type = "";
+  }
+  if (type !== "commit") throw new Error(`${target.slice(0, 8)} is not a commit in this repository`);
+  if (ancestorOf !== undefined) {
+    if (!/^[0-9a-f]{40}$/.test(ancestorOf)) throw new Error("--ancestor-of must be a full commit SHA");
+    try {
+      run("merge-base", "--is-ancestor", target, ancestorOf);
+    } catch {
+      throw new Error(`${target.slice(0, 8)} is not on main (not an ancestor of ${ancestorOf.slice(0, 8)})`);
+    }
+  }
+  const fileVersion = versionFromFile(run("show", `${target}:${versionFile}`));
+  if (fileVersion !== version) throw new Error(`${versionFile} at ${target.slice(0, 8)} says ${fileVersion}, not ${version}`);
+  const tags = run("tag", "--list", "v*").split("\n").filter(Boolean);
+  const tag = `v${version}`;
+  if (tags.includes(tag)) {
+    if (newTag) throw new Error(`tag ${tag} already exists`);
+    if (run("rev-list", "-n", "1", tag) !== target) throw new Error(`tag ${tag} already points at another commit`);
+  }
+  return tags;
+}
+
 async function api(path, { method = "GET", body } = {}) {
   const res = await fetch(`https://api.github.com${path}`, {
     method,
@@ -114,13 +151,15 @@ async function mergedPulls(repo, base) {
   return out;
 }
 
-const VALUE_FLAGS = { "--version": "version", "--target": "target", "--version-file": "versionFile", "--base": "base" };
+const VALUE_FLAGS = { "--version": "version", "--target": "target", "--version-file": "versionFile", "--base": "base",
+  "--ancestor-of": "ancestorOf" };
 
 export function parseArgs(argv) {
   const out = { dryRun: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") out.dryRun = true;
+    else if (a === "--new-tag") out.newTag = true;
     else if (VALUE_FLAGS[a] && i + 1 < argv.length) out[VALUE_FLAGS[a]] = argv[++i];
     else throw new Error(`unknown or incomplete argument ${a}`);
   }
@@ -133,22 +172,15 @@ async function main() {
   const version = String(opt.version ?? "").replace(/^v/, "");
   if (!parseVersion(version)) throw new Error(`not a version: ${JSON.stringify(opt.version)}`);
   if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error("GITHUB_REPOSITORY is not set");
-  if (!opt.target || !/^[0-9a-f]{40}$/.test(opt.target)) throw new Error("--target must be a full commit SHA");
   const tag = `v${version}`;
   const base = opt.base ?? "main";
-
-  const fileVersion = versionFromFile(git("show", `${opt.target}:${opt.versionFile ?? "package.json"}`));
-  if (fileVersion !== version) throw new Error(`${opt.versionFile ?? "package.json"} at ${opt.target.slice(0, 8)} says ${fileVersion}, not ${version}`);
 
   if (await api(`/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`)) {
     console.log(`Release ${tag} already exists; nothing to do.`);
     return;
   }
-
-  const tags = git("tag", "--list", "v*").split("\n").filter(Boolean);
-  if (tags.includes(tag) && git("rev-list", "-n", "1", tag) !== opt.target) {
-    throw new Error(`tag ${tag} already points at another commit`);
-  }
+  const tags = checkTarget({ target: opt.target, version, versionFile: opt.versionFile, ancestorOf: opt.ancestorOf,
+    newTag: opt.newTag });
   const previous = previousTag(tags, version);
   const range = previous ? `${previous}..${opt.target}` : opt.target;
   const inRelease = new Set(git("rev-list", range).split("\n").filter(Boolean));

@@ -1,7 +1,11 @@
 // Run with: node --test .github/scripts/release-notes.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildNotes, cleanTitle, compareVersions, parseArgs, parseVersion, previousTag, versionFromFile } from "./release-notes.mjs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildNotes, checkTarget, cleanTitle, compareVersions, parseArgs, parseVersion, previousTag, versionFromFile } from "./release-notes.mjs";
 
 test("parseVersion accepts plain and prerelease versions only", () => {
   assert.deepEqual(parseVersion("2.0.0"), { major: 2, minor: 0, patch: 0, pre: "" });
@@ -77,6 +81,57 @@ test("parseArgs takes the known flags only", () => {
     target: "abc",
     versionFile: "openapi.json",
   });
+  assert.deepEqual(parseArgs(["--ancestor-of", "def", "--new-tag"]), { dryRun: false, ancestorOf: "def", newTag: true });
   assert.throws(() => parseArgs(["--tag", "v1"]));
   assert.throws(() => parseArgs(["--version"]));
+});
+
+// A scratch repository: main has 2.0.0, then 2.0.1; a side branch has 2.0.0 too.
+function scratchRepo() {
+  const dir = mkdtempSync(join(tmpdir(), "release-notes-"));
+  const run = (...args) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
+  run("init", "-q", "-b", "main");
+  run("config", "user.email", "test@example.invalid");
+  run("config", "user.name", "Test");
+  const commit = (version, message) => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "x", version, description: message }));
+    run("add", "package.json");
+    run("commit", "-q", "-m", message);
+    return run("rev-parse", "HEAD");
+  };
+  const v200 = commit("2.0.0", "Release 2.0.0");
+  const v201 = commit("2.0.1", "Release 2.0.1");
+  run("switch", "-q", "-c", "side", v200);
+  const side = commit("2.0.0", "Side change");
+  run("switch", "-q", "main");
+  return { dir, run, v200, v201, side, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test("checkTarget accepts an earlier commit on main whose version matches and has no tag", () => {
+  const r = scratchRepo();
+  try {
+    assert.deepEqual(checkTarget({ target: r.v200, version: "2.0.0", ancestorOf: r.v201, newTag: true }, r.run), []);
+    assert.deepEqual(checkTarget({ target: r.v201, version: "2.0.1", ancestorOf: r.v201, newTag: true }, r.run), []);
+  } finally {
+    r.cleanup();
+  }
+});
+
+test("checkTarget refuses a commit off main, a version mismatch, an unknown commit and an existing tag", () => {
+  const r = scratchRepo();
+  try {
+    assert.throws(() => checkTarget({ target: r.side, version: "2.0.0", ancestorOf: r.v201, newTag: true }, r.run), /not on main/);
+    assert.throws(() => checkTarget({ target: r.v201, version: "2.0.0", ancestorOf: r.v201, newTag: true }, r.run), /says 2.0.1, not 2.0.0/);
+    assert.throws(() => checkTarget({ target: "f".repeat(40), version: "2.0.0", ancestorOf: r.v201, newTag: true }, r.run), /not a commit/);
+    assert.throws(() => checkTarget({ target: "HEAD", version: "2.0.1" }, r.run), /full commit SHA/);
+    assert.throws(() => checkTarget({ target: r.v200, version: "2.0.0", ancestorOf: "main", newTag: true }, r.run), /full commit SHA/);
+    r.run("tag", "v2.0.0", r.v200);
+    assert.throws(() => checkTarget({ target: r.v200, version: "2.0.0", ancestorOf: r.v201, newTag: true }, r.run), /already exists/);
+    // A pushed tag (no --new-tag) is fine on its own commit, and refused elsewhere.
+    assert.deepEqual(checkTarget({ target: r.v200, version: "2.0.0" }, r.run), ["v2.0.0"]);
+    r.run("tag", "v2.0.1", r.v200);
+    assert.throws(() => checkTarget({ target: r.v201, version: "2.0.1" }, r.run), /another commit/);
+  } finally {
+    r.cleanup();
+  }
 });
