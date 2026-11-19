@@ -2,6 +2,20 @@
 
 All notable changes to this project are listed here.
 
+## 2.0.1
+
+### Security
+
+- Runtime dependencies updated to clear the known high-severity advisories in the production
+  dependency tree: `@modelcontextprotocol/sdk` 1.32.2, `zod` 4 (GHSA-mrhx-c7xc-m3w5), and
+  `body-parser` 2.4.0, `qs` 6.16.1, `hono` 4.13.19, `@hono/node-server` 2.1.9, `fast-uri` 3.1.9
+  and `ip-address` 10.7.6 through overrides. `npm audit --omit=dev` reports no vulnerabilities.
+
+### Changed
+
+- With `zod` 4, advertised tool input schemas no longer include `additionalProperties: false`.
+  Unknown input keys are still removed before a tool runs. Tool behavior is unchanged.
+
 ## 2.0.0
 
 ### Breaking
