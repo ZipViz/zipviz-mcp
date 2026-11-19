@@ -1,0 +1,94 @@
+name: Release
+
+# One GitHub Release per version, with notes from the titles of the pull
+# requests merged since the previous release (.github/scripts/release-notes.mjs).
+#
+# - Pushing a version tag (v1.2.3) creates its release.
+# - Running this workflow by hand from main with a version creates the tag and
+#   release at the tip of main, or at an earlier commit given as `commit`. That
+#   commit must be on main (an ancestor of its tip), its package.json must say
+#   the version, and no tag for the version may exist yet. The tag is created
+#   with the workflow token, so it does not start the Publish workflow: nothing
+#   goes to npm.
+# - A release that already exists is left alone.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the v (it must match the version file)"
+        required: true
+      commit:
+        description: "Optional: full SHA of an earlier commit on main to release (default: the tip of main)"
+        required: false
+        default: ""
+  pull_request:
+    paths:
+      - ".github/scripts/release-notes*.mjs"
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  VERSION_FILE: package.json
+
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - run: node --test .github/scripts/release-notes.test.mjs
+      # Prints the notes the current version would get. Read-only: --dry-run creates nothing.
+      - name: Dry run against this repository
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          version="$(node -p "const d=require('./' + process.env.VERSION_FILE); d.version ?? d.info.version")"
+          node .github/scripts/release-notes.mjs --version "$version" --target "$(git rev-parse HEAD)" \
+            --version-file "$VERSION_FILE" --dry-run
+
+  release:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Create the release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_COMMIT: ${{ inputs.commit }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            node .github/scripts/release-notes.mjs --version "${GITHUB_REF_NAME#v}" --target "$GITHUB_SHA" \
+              --version-file "$VERSION_FILE"
+          elif [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            node .github/scripts/release-notes.mjs --version "$INPUT_VERSION" --target "${INPUT_COMMIT:-$GITHUB_SHA}" \
+              --version-file "$VERSION_FILE" --ancestor-of "$GITHUB_SHA" --new-tag
+          else
+            echo "Run this by hand from main only (got $GITHUB_REF)." >&2
+            exit 1
+          fi
