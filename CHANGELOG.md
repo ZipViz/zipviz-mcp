@@ -16,6 +16,10 @@ All notable changes to this project are listed here.
 - With `zod` 4, advertised tool input schemas no longer include `additionalProperties: false`.
   Unknown input keys are still removed before a tool runs. Tool behavior is unchanged.
 
+### Fixed
+
+- The server now reports its package version (2.0.1) in its MCP server info. 2.0.0 reported 1.1.1.
+
 ## 2.0.0
 
 ### Breaking
