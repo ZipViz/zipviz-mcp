@@ -43,23 +43,55 @@ export function checkPackage({ files, scripts, bundled }, expected) {
   return problems;
 }
 
-function packResult() {
-  const out = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
-    cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"],
-  });
-  const [result] = JSON.parse(out);
+// `npm pack --json` returns an array of one result up to npm 11, and an object
+// keyed by package name from npm 12. Accept exactly one well-formed result in
+// either shape; anything else is an error, never a guess.
+export function parsePackJson(text, packageName) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("npm pack output is not JSON");
+  }
+  let results;
+  if (Array.isArray(parsed)) {
+    results = parsed;
+  } else if (parsed !== null && typeof parsed === "object") {
+    const keys = Object.keys(parsed);
+    if (keys.length !== 1 || keys[0] !== packageName) {
+      throw new Error(`npm pack output must hold exactly one result, for ${packageName}`);
+    }
+    results = [parsed[packageName]];
+  } else {
+    throw new Error("npm pack output has an unknown shape");
+  }
+  if (results.length !== 1) throw new Error("npm pack output must hold exactly one result");
+  const [result] = results;
+  if (result === null || typeof result !== "object" || result.name !== packageName
+      || !Array.isArray(result.files)
+      || !result.files.every((file) => file !== null && typeof file === "object" && typeof file.path === "string")
+      || (result.bundled !== undefined && !Array.isArray(result.bundled))) {
+    throw new Error("npm pack result is malformed");
+  }
   return { files: result.files.map((file) => file.path).sort(), bundled: result.bundled ?? [] };
 }
 
+function packResult(packageName) {
+  const out = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+    cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"],
+  });
+  return parsePackJson(out, packageName);
+}
+
 function main() {
-  const { files, bundled } = packResult();
+  const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  const { files, bundled } = packResult(manifest.name);
   if (process.argv.includes("--update")) {
     writeFileSync(EXPECTED_PATH, `${files.join("\n")}\n`);
     console.log(`package contents: wrote ${files.length} paths to scripts/package-files.txt`);
     return;
   }
-  const { scripts } = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-  const problems = checkPackage({ files, scripts, bundled }, readExpected(readFileSync(EXPECTED_PATH, "utf8")));
+  const problems = checkPackage({ files, scripts: manifest.scripts, bundled }, readExpected(readFileSync(EXPECTED_PATH, "utf8")));
   if (problems.length > 0) {
     for (const problem of problems) console.error(`package contents: ${problem}`);
     console.error("If the change is intended, rebuild from clean and run: npm run check:package -- --update");
