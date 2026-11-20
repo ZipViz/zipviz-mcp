@@ -22,7 +22,13 @@ npm ci
 npm test          # vitest
 npm run typecheck # tsc
 npm run build     # dist/
+npm run check:package  # after a clean build: the exact file list npm would publish
 ```
+
+If a change adds, removes or renames a file under `dist/`, rebuild from a clean `dist/` and
+run `npm run check:package -- --update`, then commit `scripts/package-files.txt`. The check also
+fails if `package.json` gains an install-time script (`preinstall`, `install`, `postinstall` or
+`prepare`, with their pre and post forms).
 
 CI runs the same checks plus a full-history secret scan (`bash scripts/scan-secrets.sh history`).
 
