@@ -14,7 +14,18 @@ const CLIENT_TOOLS = [
   "zipviz_verify",
   "zipviz_explain_verification",
   "zipviz_sign_message",
+  "zipviz_join_start",
+  "zipviz_join_status",
+  "zipviz_join_cancel",
+  "zipviz_join_adopt",
 ];
+
+// The one file the stdio entry reaches that may write to disk: the join tools'
+// key store, which keeps an agent's pending key between sign-up steps. It writes
+// only under ~/.zipviz/keys/ (its default root). Every other reachable file keeps
+// the ban on persistence and file writes.
+const WRITE_ALLOWED = new Set(["src/lib/join-store.ts"]);
+const WRITES = /node:sqlite|appendFile|writeFile|createWriteStream|mkdir/;
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "src");
@@ -55,7 +66,7 @@ async function listToolNames(server: McpServer): Promise<string[]> {
 }
 
 describe("client tool surface", () => {
-  it("is exactly the six client tools", async () => {
+  it("is exactly the ten client tools", async () => {
     expect((await listToolNames(createClientServer())).sort()).toEqual([...CLIENT_TOOLS].sort());
   });
 
@@ -72,16 +83,29 @@ describe("client tool surface", () => {
     expect(await listToolNames(server)).toHaveLength(CLIENT_TOOLS.length);
   });
 
-  it("ships only code the stdio entry reaches, with no persistence or file writes", () => {
+  it("ships only code the stdio entry reaches, with no persistence or file writes outside the join key store", () => {
     const closure = importClosure(join(SRC, "stdio.ts"));
     for (const file of closure) {
       expect(statSync(file).isFile(), relative(ROOT, file)).toBe(true);
+      if (WRITE_ALLOWED.has(relative(ROOT, file))) continue;
       const text = readFileSync(file, "utf8");
-      expect(text, relative(ROOT, file)).not.toMatch(/node:sqlite|appendFile|writeFile|createWriteStream|mkdir/);
+      expect(text, relative(ROOT, file)).not.toMatch(WRITES);
+    }
+    // The allowlist is exact: every allowed file is reachable, and each one does write.
+    for (const allowed of WRITE_ALLOWED) {
+      expect(closure.has(join(ROOT, allowed)), allowed).toBe(true);
+      expect(readFileSync(join(ROOT, allowed), "utf8"), allowed).toMatch(WRITES);
     }
     const unreachable = sourceFiles(SRC)
       .filter((file) => !closure.has(file))
       .map((file) => relative(ROOT, file));
     expect(unreachable).toEqual([]);
+  });
+
+  it("keeps the join key store under ~/.zipviz/keys/ by default", () => {
+    const text = readFileSync(join(SRC, "lib/join-store.ts"), "utf8");
+    expect(text).toContain('constructor(root = join(homedir(), ".zipviz", "keys"))');
+    // The only home-relative path it builds is that root.
+    expect(text.match(/homedir\(\)/g)).toHaveLength(1);
   });
 });
