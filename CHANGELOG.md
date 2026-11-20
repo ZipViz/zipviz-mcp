@@ -2,6 +2,14 @@
 
 All notable changes to this project are listed here.
 
+## Unreleased
+
+### Packaging
+
+- CI and the publish workflow check the exact list of files `npm pack` would publish, and fail if
+  an install-time script (`preinstall`, `install`, `postinstall`, `prepare` and their pre and post
+  forms), a `binding.gyp` or a bundled dependency would ship.
+
 ## 2.0.1
 
 ### Security
