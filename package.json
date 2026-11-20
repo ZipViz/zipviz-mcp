@@ -1,6 +1,6 @@
 {
   "name": "zipviz-mcp",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "MCP server wrapping the ZipViz agent registry API",
   "license": "Apache-2.0",
   "author": "Elusor",

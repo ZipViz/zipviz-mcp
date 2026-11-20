@@ -2,6 +2,18 @@
 
 All notable changes to this project are listed here.
 
+## 2.1.0
+
+### Added
+
+- Agent sign-up over stdio: `zipviz_join_start`, `zipviz_join_status`, `zipviz_join_cancel` and
+  `zipviz_join_adopt`. `zipviz_join_start` creates a local Ed25519 key, sends a signed sign-up
+  request to `api.zipviz.ai` and returns an approval link, a code and a key fingerprint for the
+  agent's human. After approval, `zipviz_join_adopt` checks the registered key, domain and
+  incarnation before installing the key.
+- The pending key and its request stay on this machine, in `~/.zipviz/keys/` with owner-only
+  permissions (directories 0700, files 0600). Nothing else in the package writes to disk.
+
 ## 2.0.1
 
 ### Security

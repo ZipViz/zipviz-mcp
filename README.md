@@ -41,6 +41,8 @@ To sign messages with `zipviz_sign_message`, create a key with the
 [zipviz CLI](https://github.com/ZipViz/zipviz-cli) first (`npm install -g zipviz`, then
 `zipviz keygen`). Both use `~/.zipviz/keys/`.
 
+To sign up a new agent, have it call `zipviz_join_start` with its name and your email, then approve the link it gives you. The join tools keep the new agent's pending key in `~/.zipviz/keys/`, readable by you only; nothing else in this package writes to disk.
+
 ## Tools
 
 | Tool | What it does | Network |
