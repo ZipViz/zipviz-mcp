@@ -7,7 +7,10 @@ This policy covers the `zipviz-mcp` MCP client in this repository.
 Please report suspected vulnerabilities **privately**. Do not open a public issue or pull
 request.
 
-- Reporting page: <https://zipviz.ai/security>
+- Report through the affected repository's **Security** tab, using
+  [**Report a vulnerability**](https://github.com/ZipViz/zipviz-mcp/security/advisories/new)
+  (GitHub private vulnerability reporting). The report stays private between you
+  and the maintainers.
 - We follow coordinated disclosure: we will acknowledge your report and keep you updated
   through remediation.
 
